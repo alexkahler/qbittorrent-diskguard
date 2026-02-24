@@ -1,4 +1,4 @@
-# DiskGuard v1
+# DiskGuard
 
 DiskGuard is a Docker sidecar for qBittorrent that prevents disk exhaustion.
 It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps local torrent state files.
@@ -7,10 +7,10 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 
 - Pauses newly added torrents quickly when free space is low (`POST /on-add`).
 - Enforces SOFT and HARD disk safety modes from a polling loop.
-- Resumes only torrents tagged as paused by DiskGuard.
+- Resumes only torrents tagged as paused by DiskGuard when free space has been regained.
 - Uses projection math (`amount_left`, active remaining, floor, buffer) before resuming.
 
-## What DiskGuard does not do in v1
+## What DiskGuard does not do
 
 - No torrent/file deletion.
 - No category rewrites.
@@ -86,9 +86,9 @@ Why set `user` on `diskguard`:
 
 ```toml
 [qbittorrent]
-url = "http://qbittorrent:8080"
-username = "admin"
-password = "password"
+url = "http://qbittorrent:8080" # Required
+username = "admin"              # Required
+password = "password"           # Required
 
 [disk]
 watch_path = "/downloads"
