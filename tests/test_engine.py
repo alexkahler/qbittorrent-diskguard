@@ -1,0 +1,284 @@
+"""Integration-style tests for mode enforcement behavior."""
+
+import asyncio
+
+from diskguard.engine import ModeEngine
+from diskguard.errors import QbittorrentUnavailableError
+from diskguard.resume_planner import ResumePlanner
+from tests.helpers import FakeDiskProbe, FakeQbClient, disk_stats, make_config, missing_path_error, torrent
+
+
+async def test_normal_to_soft_transition_adds_soft_allowed_without_pausing_existing_downloaders() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("a", state="downloading", amount_left=200)],
+            [torrent("a", state="downloading", amount_left=200)],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=200),  # NORMAL (20%)
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT (9%)
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    await engine.tick()
+
+    assert ("a", "soft_allowed") in qb.add_tag_calls
+    assert "a" not in qb.pause_calls
+
+
+async def test_soft_mode_steady_enforcement_pauses_new_downloaders() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [],
+            [torrent("old", state="downloading", amount_left=50)],
+            [
+                torrent("old", state="downloading", amount_left=40, tags=("soft_allowed",)),
+                torrent("new", state="downloading", amount_left=10),
+            ],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=300),  # NORMAL
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT transition
+            disk_stats(total_bytes=1_000, free_bytes=85),  # SOFT steady
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    await engine.tick()
+    await engine.tick()
+
+    assert "new" in qb.pause_calls
+    assert ("new", "diskguard_paused") in qb.add_tag_calls
+    assert "old" not in qb.pause_calls
+
+
+async def test_hard_mode_pauses_all_downloading_non_forced_and_cleans_soft_tags() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("base", state="downloading", amount_left=50, tags=("soft_allowed",))],  # SOFT baseline
+            [
+                torrent("base", state="downloading", amount_left=40, tags=("soft_allowed",)),
+                torrent("x", state="downloading", amount_left=30),
+                torrent("forced", state="forcedDL", amount_left=30),
+            ],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT
+            disk_stats(total_bytes=1_000, free_bytes=40),  # HARD
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    await engine.tick()
+
+    assert ("base", "soft_allowed") in qb.remove_tag_calls
+    assert "base" in qb.pause_calls
+    assert "x" in qb.pause_calls
+    assert "forced" not in qb.pause_calls
+    assert ("base", "diskguard_paused") in qb.add_tag_calls
+    assert ("x", "diskguard_paused") in qb.add_tag_calls
+
+
+async def test_normal_mode_self_heals_drifted_paused_tag_and_resumes_candidates() -> None:
+    config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [
+                torrent("drifted", state="downloading", amount_left=30, tags=("diskguard_paused",)),
+                torrent("candidate", state="pausedDL", amount_left=10, tags=("diskguard_paused",)),
+            ]
+        ]
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=700)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert ("drifted", "diskguard_paused") in qb.remove_tag_calls
+    assert "candidate" in qb.resume_calls
+
+
+async def test_normal_mode_cleans_soft_allowed_tags() -> None:
+    config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [
+                torrent("soft", state="pausedDL", amount_left=20, tags=("soft_allowed",)),
+            ]
+        ]
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=700)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert ("soft", "soft_allowed") in qb.remove_tag_calls
+
+
+async def test_missing_watch_path_is_safe_noop_for_tick() -> None:
+    config = make_config()
+    qb = FakeQbClient(torrents_sequence=[[torrent("x", state="downloading", amount_left=10)]])
+    probe = FakeDiskProbe(stats_sequence=None, error=missing_path_error())
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert qb.fetch_calls == 0
+    assert qb.pause_calls == []
+    assert qb.resume_calls == []
+
+
+async def test_qbittorrent_unreachable_skips_tick_without_actions() -> None:
+    config = make_config()
+    qb = FakeQbClient(fetch_error=QbittorrentUnavailableError("offline"))
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert qb.fetch_calls == 1
+    assert qb.pause_calls == []
+    assert qb.add_tag_calls == []
+
+
+async def test_run_forever_recovers_from_tick_exception_and_stops() -> None:
+    config = make_config(interval_seconds=0)
+    qb = FakeQbClient()
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+    stop_event = asyncio.Event()
+    calls: list[int] = []
+
+    async def fake_tick() -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        stop_event.set()
+
+    engine.tick = fake_tick  # type: ignore[method-assign]
+    await engine.run_forever(stop_event)
+    assert len(calls) == 2
+
+
+async def test_soft_transition_skips_forced_non_downloading_and_existing_soft_allowed() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [],
+            [
+                torrent("pausedtag", state="downloading", amount_left=10, tags=("diskguard_paused",)),
+                torrent("forced", state="forcedDL", amount_left=10),
+                torrent("paused", state="pausedDL", amount_left=10),
+                torrent("already", state="downloading", amount_left=10, tags=("soft_allowed",)),
+                torrent("valid", state="downloading", amount_left=10),
+            ],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=500),  # NORMAL
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    await engine.tick()
+
+    assert ("valid", "soft_allowed") in qb.add_tag_calls
+    assert "forced" not in qb.pause_calls
+    assert "paused" not in qb.pause_calls
+    assert "already" not in qb.pause_calls
+    assert "pausedtag" in qb.pause_calls
+
+
+async def test_hard_mode_ignores_non_downloading_states() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [],
+            [
+                torrent("non_download", state="pausedDL", amount_left=10),
+                torrent("download", state="downloading", amount_left=20),
+            ],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT baseline
+            disk_stats(total_bytes=1_000, free_bytes=40),  # HARD
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    await engine.tick()
+
+    assert "download" in qb.pause_calls
+    assert "non_download" not in qb.pause_calls
+
+
+async def test_pause_and_mark_stops_when_pause_fails() -> None:
+    config = make_config()
+    qb = FakeQbClient(fail_pause={"x"})
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine._pause_and_mark("x")
+
+    assert qb.pause_calls == ["x"]
+    assert qb.add_tag_calls == []
+
+
+async def test_pause_and_mark_continues_when_add_tag_fails() -> None:
+    config = make_config()
+    qb = FakeQbClient(fail_add_tag={("x", "diskguard_paused")})
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine._pause_and_mark("x")
+
+    assert qb.pause_calls == ["x"]
+    assert qb.add_tag_calls == [("x", "diskguard_paused")]
+
+
+async def test_add_and_remove_tag_helpers_return_false_on_failure() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        fail_add_tag={("x", "soft_allowed")},
+        fail_remove_tag={("x", "soft_allowed")},
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    add_result = await engine._add_tag("x", "soft_allowed")
+    remove_result = await engine._remove_tag("x", "soft_allowed", reason="test")
+
+    assert add_result is False
+    assert remove_result is False

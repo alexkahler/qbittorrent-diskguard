@@ -1,0 +1,209 @@
+"""qBittorrent Web API client with session and retry handling."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+import aiohttp
+
+from diskguard.config import QbittorrentConfig
+from diskguard.errors import (
+    QbittorrentAuthenticationError,
+    QbittorrentRequestError,
+    QbittorrentUnavailableError,
+)
+from diskguard.models import TorrentSnapshot
+from diskguard.state import parse_tags
+
+
+class QbittorrentClient:
+    """Thin async qBittorrent API client with bounded auth retry."""
+
+    def __init__(
+        self,
+        config: QbittorrentConfig,
+        *,
+        logger: logging.Logger | None = None,
+    ) -> None:
+        self._config = config
+        self._logger = logger or logging.getLogger(__name__)
+        self._base_url = config.url.rstrip("/")
+        self._session: aiohttp.ClientSession | None = None
+        self._auth_lock = asyncio.Lock()
+        self._logged_in = False
+
+    async def close(self) -> None:
+        """Closes the underlying HTTP session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+    async def fetch_torrents(self) -> list[TorrentSnapshot]:
+        """Fetches torrents with the fields required by DiskGuard."""
+        payload = await self._request("GET", "/api/v2/torrents/info", expect_json=True)
+        if not isinstance(payload, list):
+            raise QbittorrentRequestError("Unexpected torrents/info payload shape")
+
+        torrents: list[TorrentSnapshot] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            torrent_hash = str(item.get("hash", "")).strip()
+            if not torrent_hash:
+                continue
+
+            amount_left_raw = item.get("amount_left")
+            amount_left = _coerce_optional_int(amount_left_raw)
+
+            torrents.append(
+                TorrentSnapshot(
+                    hash=torrent_hash,
+                    state=str(item.get("state", "")),
+                    amount_left=amount_left,
+                    priority=_coerce_int(item.get("priority"), default=0),
+                    added_on=_coerce_int(item.get("added_on"), default=0),
+                    tags=parse_tags(_coerce_optional_string(item.get("tags"))),
+                    name=_coerce_optional_string(item.get("name")),
+                    category=_coerce_optional_string(item.get("category")),
+                )
+            )
+        return torrents
+
+    async def pause_torrent(self, torrent_hash: str) -> None:
+        """Pauses a single torrent."""
+        await self._request(
+            "POST",
+            "/api/v2/torrents/pause",
+            data={"hashes": torrent_hash},
+        )
+
+    async def resume_torrent(self, torrent_hash: str) -> None:
+        """Resumes a single torrent."""
+        await self._request(
+            "POST",
+            "/api/v2/torrents/resume",
+            data={"hashes": torrent_hash},
+        )
+
+    async def add_tag(self, torrent_hash: str, tag: str) -> None:
+        """Adds a tag to a single torrent."""
+        await self._request(
+            "POST",
+            "/api/v2/torrents/addTags",
+            data={"hashes": torrent_hash, "tags": tag},
+        )
+
+    async def remove_tag(self, torrent_hash: str, tag: str) -> None:
+        """Removes a tag from a single torrent."""
+        await self._request(
+            "POST",
+            "/api/v2/torrents/removeTags",
+            data={"hashes": torrent_hash, "tags": tag},
+        )
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session and not self._session.closed:
+            return self._session
+
+        timeout = aiohttp.ClientTimeout(
+            total=self._config.total_timeout_seconds,
+            connect=self._config.connect_timeout_seconds,
+            sock_read=self._config.read_timeout_seconds,
+        )
+        self._session = aiohttp.ClientSession(timeout=timeout)
+        self._logged_in = False
+        return self._session
+
+    async def _login(self, *, force: bool = False) -> None:
+        async with self._auth_lock:
+            if self._logged_in and not force:
+                return
+
+            session = await self._ensure_session()
+            try:
+                async with session.post(
+                    f"{self._base_url}/api/v2/auth/login",
+                    data={
+                        "username": self._config.username,
+                        "password": self._config.password,
+                    },
+                ) as response:
+                    body = await response.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                raise QbittorrentUnavailableError(f"Unable to login to qBittorrent: {exc}") from exc
+
+            if response.status != 200 or body.strip().lower() != "ok.":
+                raise QbittorrentAuthenticationError(
+                    f"qBittorrent login failed with status {response.status}"
+                )
+
+            self._logged_in = True
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        expect_json: bool = False,
+    ) -> Any:
+        for attempt in range(2):
+            await self._login(force=False)
+            session = await self._ensure_session()
+            url = f"{self._base_url}{path}"
+
+            try:
+                async with session.request(method, url, params=params, data=data) as response:
+                    if response.status == 403 and attempt == 0:
+                        self._logged_in = False
+                        await self._login(force=True)
+                        continue
+
+                    body = await response.text()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                self._logged_in = False
+                raise QbittorrentUnavailableError(f"qBittorrent request failed: {exc}") from exc
+
+            if response.status >= 400:
+                raise QbittorrentRequestError(
+                    f"qBittorrent {method} {path} failed with status {response.status}: {body}"
+                )
+
+            if expect_json:
+                try:
+                    return await response.json(content_type=None)
+                except Exception as exc:  # noqa: BLE001
+                    raise QbittorrentRequestError(
+                        f"qBittorrent {method} {path} returned invalid JSON"
+                    ) from exc
+
+            return body
+
+        raise QbittorrentAuthenticationError(f"qBittorrent {method} {path} failed after relogin")
+
+
+def _coerce_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    converted = str(value).strip()
+    if not converted:
+        return None
+    return converted

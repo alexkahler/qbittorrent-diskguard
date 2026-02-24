@@ -1,0 +1,53 @@
+[qbittorrent]
+# Base URL for qBittorrent Web API. Default: "http://qbittorrent:8080". Type: string.
+url = "http://qbittorrent:8080"
+# qBittorrent username used for API login. Default: none (required). Type: string.
+username = "admin"
+# qBittorrent password used for API login. Default: none (required). Type: string.
+password = "password"
+# HTTP connect timeout for qBittorrent requests in seconds. Default: 2.0. Type: float.
+connect_timeout_seconds = 2.0
+# HTTP read timeout for qBittorrent requests in seconds. Default: 8.0. Type: float.
+read_timeout_seconds = 8.0
+# Total HTTP timeout for qBittorrent requests in seconds. Default: 12.0. Type: float.
+total_timeout_seconds = 12.0
+
+[disk]
+# Path inside DiskGuard container to the downloads filesystem to monitor. Default: "/downloads". Type: string.
+watch_path = "/downloads"
+# Enter SOFT mode when free disk percent drops below this threshold. Default: 10.0. Type: float.
+soft_pause_below_pct = 10.0
+# Enter HARD mode when free disk percent drops below this threshold. Default: 5.0. Type: float.
+hard_pause_below_pct = 5.0
+# Minimum free disk percent target for resume planning floor. Default: 10.0. Type: float.
+resume_floor_pct = 10.0
+# Extra reserve added to resume planning floor in gibibytes. Default: 10.0. Type: float.
+safety_buffer_gb = 10.0
+# Torrent states treated as downloading-ish for enforcement/projection. Default: ["downloading", "metaDL", "queuedDL", "stalledDL", "checkingDL", "allocating"]. Type: list[string].
+downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkingDL", "allocating"]
+
+[polling]
+# Seconds between enforcement ticks. Default: 30. Type: int.
+interval_seconds = 30
+
+[resume]
+# Resume candidate ordering policy. Default: "priority_fifo". Type: string enum (smallest_first|priority_fifo|largest_first).
+policy = "priority_fifo"
+# For priority_fifo policy, stop at first non-fitting candidate when true. Default: true. Type: bool.
+strict_fifo = true
+
+[tagging]
+# Tag added to torrents paused by DiskGuard. Default: "diskguard_paused". Type: string.
+paused_tag = "diskguard_paused"
+# Tag granted to in-progress torrents allowed to keep downloading in SOFT mode. Default: "soft_allowed". Type: string.
+soft_allowed_tag = "soft_allowed"
+
+[logging]
+# Application log level. Default: "INFO". Type: string enum (DEBUG|INFO|WARNING|ERROR).
+level = "INFO"
+
+[server]
+# HTTP bind address for DiskGuard API server. Default: "0.0.0.0". Type: string.
+host = "0.0.0.0"
+# HTTP listen port for DiskGuard API server. Default: 7070. Type: int.
+port = 7070
