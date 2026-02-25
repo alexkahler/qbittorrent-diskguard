@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
 import tomllib
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -12,8 +14,48 @@ from typing import Any, Callable
 from diskguard.errors import ConfigError
 from diskguard.models import ResumePolicy
 
-ENV_CONFIG_PATH = "DISKGUARD_CONFIG_PATH"
-DEFAULT_CONFIG_PATH = "/config/config.toml"
+ENV_CONFIG_PATH = "DISKGUARD_CONFIG"
+LEGACY_ENV_CONFIG_PATH = "DISKGUARD_CONFIG_PATH"
+CONFIG_ROOT_PATH = Path("/config")
+DEFAULT_CONFIG_PATH = str(CONFIG_ROOT_PATH / "config.toml")
+_NON_PERSISTENT_WARNING = (
+    "/config is not backed by a Docker volume. "
+    "Configuration will not persist if the container is removed."
+)
+_NON_WRITABLE_ERROR = (
+    "/config is not writable. Mount a writable volume (e.g. ./diskguard:/config)."
+)
+DEFAULT_CONFIG_TEMPLATE = """[qbittorrent]
+url = "http://qbittorrent:8080"
+username = "admin"
+password = "password"
+
+[disk]
+watch_path = "/downloads"
+soft_pause_below_pct = 10.0
+hard_pause_below_pct = 5.0
+resume_floor_pct = 10.0
+safety_buffer_gb = 10.0
+downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkingDL", "allocating"]
+
+[polling]
+interval_seconds = 30
+
+[resume]
+policy = "priority_fifo"
+strict_fifo = true
+
+[tagging]
+paused_tag = "diskguard_paused"
+soft_allowed_tag = "soft_allowed"
+
+[logging]
+level = "INFO"
+
+[server]
+host = "0.0.0.0"
+port = 7070
+"""
 
 DEFAULT_DOWNLOADING_STATES = (
     "downloading",
@@ -103,6 +145,7 @@ class AppConfig:
 
 
 EnvParser = Callable[[str], Any]
+LOGGER = logging.getLogger(__name__)
 
 
 def _parse_int(raw: str) -> int:
@@ -228,11 +271,96 @@ def load_config(config_path: str | None = None) -> AppConfig:
     Raises:
         ConfigError: If file loading, parsing, overrides, or validation fails.
     """
-    resolved_path = config_path or os.getenv(ENV_CONFIG_PATH, DEFAULT_CONFIG_PATH)
-    raw_config = _read_toml(resolved_path)
+    resolved_path = _resolve_config_path(config_path)
+    _bootstrap_config_file(resolved_path)
+
+    raw_config = _read_toml(str(resolved_path))
     merged_config = copy.deepcopy(raw_config)
     _apply_env_overrides(merged_config)
     return _build_config(merged_config)
+
+
+def _resolve_config_path(config_path: str | None) -> Path:
+    """Resolves config path from explicit argument or environment overrides."""
+    if config_path is not None:
+        return Path(config_path)
+
+    env_path = os.getenv(ENV_CONFIG_PATH)
+    if env_path is not None and env_path.strip():
+        resolved = Path(env_path.strip())
+        _validate_env_config_path(resolved)
+        return resolved
+
+    legacy_env_path = os.getenv(LEGACY_ENV_CONFIG_PATH)
+    if legacy_env_path is not None and legacy_env_path.strip():
+        resolved = Path(legacy_env_path.strip())
+        _validate_env_config_path(resolved)
+        return resolved
+
+    return Path(DEFAULT_CONFIG_PATH)
+
+
+def _validate_env_config_path(config_path: Path) -> None:
+    """Validates that DISKGUARD_CONFIG points to a path under /config."""
+    try:
+        config_path.relative_to(CONFIG_ROOT_PATH)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{ENV_CONFIG_PATH} must point to a config file inside {CONFIG_ROOT_PATH.as_posix()}"
+        ) from exc
+
+
+def _bootstrap_config_file(config_path: Path) -> None:
+    """Ensures config directory/file exist and are writable before load."""
+    config_dir = config_path.parent
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ConfigError(_NON_WRITABLE_ERROR) from exc
+
+    if not _is_directory_writable(config_dir):
+        raise ConfigError(_NON_WRITABLE_ERROR)
+
+    if _should_warn_non_persistent(config_dir):
+        LOGGER.warning(_NON_PERSISTENT_WARNING)
+
+    if config_path.exists():
+        return
+
+    try:
+        config_path.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(_NON_WRITABLE_ERROR) from exc
+    LOGGER.info("Created default config at %s", config_path.as_posix())
+
+
+def _should_warn_non_persistent(config_dir: Path) -> bool:
+    """Returns whether startup should warn about non-persistent /config."""
+    try:
+        config_dir.relative_to(CONFIG_ROOT_PATH)
+    except ValueError:
+        return False
+    return not _is_mount_point(CONFIG_ROOT_PATH)
+
+
+def _is_mount_point(path: Path) -> bool:
+    """Checks whether path is a mount point (heuristic)."""
+    try:
+        return path.is_mount()
+    except OSError:
+        return False
+
+
+def _is_directory_writable(path: Path) -> bool:
+    """Checks whether a directory is writable by creating a probe file."""
+    probe_path = path / f".diskguard-write-test-{uuid.uuid4().hex}"
+    try:
+        with probe_path.open("w", encoding="utf-8") as handle:
+            handle.write("")
+        probe_path.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
 
 
 def _read_toml(config_path: str) -> dict[str, Any]:
