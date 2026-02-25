@@ -1,3 +1,3 @@
 """DiskGuard application version."""
 
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.5.5"

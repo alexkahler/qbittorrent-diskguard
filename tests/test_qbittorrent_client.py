@@ -186,14 +186,14 @@ async def test_pause_resume_and_tag_operations_hit_expected_endpoints() -> None:
             await client.close()
 
     assert captured["pause"]["method"] == "POST"
-    assert captured["pause"]["path_qs"] == "/api/v2/torrents/stop?hashes=hash1"
-    assert captured["pause"]["query"] == {"hashes": "hash1"}
-    assert captured["pause"]["form"] == {}
+    assert captured["pause"]["path_qs"] == "/api/v2/torrents/stop"
+    assert captured["pause"]["query"] == {}
+    assert captured["pause"]["form"] == {"hashes": "hash1"}
 
     assert captured["resume"]["method"] == "POST"
-    assert captured["resume"]["path_qs"] == "/api/v2/torrents/start?hashes=hash1"
-    assert captured["resume"]["query"] == {"hashes": "hash1"}
-    assert captured["resume"]["form"] == {}
+    assert captured["resume"]["path_qs"] == "/api/v2/torrents/start"
+    assert captured["resume"]["query"] == {}
+    assert captured["resume"]["form"] == {"hashes": "hash1"}
 
     assert captured["addTags"]["method"] == "POST"
     assert captured["addTags"]["path_qs"] == "/api/v2/torrents/addTags"
@@ -214,9 +214,11 @@ async def test_pause_and_resume_allow_pipe_delimited_hash_list() -> None:
 
     def make_action_handler(action_name: str):
         async def handler(request: web.Request) -> web.Response:
+            form_data = await request.post()
             captured[action_name] = {
+                "path_qs": request.path_qs,
                 "raw_path": request.raw_path,
-                "hashes": request.query.get("hashes", ""),
+                "hashes": str(form_data.get("hashes", "")),
             }
             return web.Response(text="")
 
@@ -242,8 +244,10 @@ async def test_pause_and_resume_allow_pipe_delimited_hash_list() -> None:
 
     assert captured["pause"]["hashes"] == "hash1|hash2"
     assert captured["resume"]["hashes"] == "hash1|hash2"
-    assert "%7C" in captured["pause"]["raw_path"]
-    assert "%7C" in captured["resume"]["raw_path"]
+    assert captured["pause"]["path_qs"] == "/api/v2/torrents/stop"
+    assert captured["resume"]["path_qs"] == "/api/v2/torrents/start"
+    assert captured["pause"]["raw_path"] == "/api/v2/torrents/stop"
+    assert captured["resume"]["raw_path"] == "/api/v2/torrents/start"
 
 
 async def test_pause_404_error_includes_final_endpoint_and_detected_versions() -> None:
@@ -276,6 +280,6 @@ async def test_pause_404_error_includes_final_endpoint_and_detected_versions() -
             await client.close()
 
     message = str(exc_info.value)
-    assert f"{base_url}/api/v2/torrents/stop?hashes=hash404" in message
+    assert f"{base_url}/api/v2/torrents/stop" in message
     assert "status 404: Not Found" in message
     assert "detected versions: qBittorrent=4.6.4, webapi=2.8.19" in message
