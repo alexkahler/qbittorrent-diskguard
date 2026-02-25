@@ -31,6 +31,9 @@ watch_path = "/downloads"
     assert config.disk.soft_pause_below_pct == 10.0
     assert config.resume.policy.value == "priority_fifo"
     assert config.server.port == 7070
+    assert config.polling.on_add_quick_poll_interval_seconds == 1.0
+    assert config.polling.on_add_quick_poll_max_attempts == 10
+    assert config.polling.on_add_quick_poll_max_concurrency == 32
 
 
 def test_load_config_defaults_watch_path_when_missing(tmp_path: Path) -> None:
@@ -71,12 +74,18 @@ strict_fifo = true
     monkeypatch.setenv("DISKGUARD_RESUME_POLICY", "smallest_first")
     monkeypatch.setenv("DISKGUARD_RESUME_STRICT_FIFO", "false")
     monkeypatch.setenv("DISKGUARD_POLLING_INTERVAL_SECONDS", "45")
+    monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS", "0.5")
+    monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS", "20")
+    monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY", "12")
     monkeypatch.setenv("DISKGUARD_DISK_DOWNLOADING_STATES", "downloading,metaDL")
 
     config = load_config(str(config_file))
     assert config.resume.policy.value == "smallest_first"
     assert config.resume.strict_fifo is False
     assert config.polling.interval_seconds == 45
+    assert config.polling.on_add_quick_poll_interval_seconds == 0.5
+    assert config.polling.on_add_quick_poll_max_attempts == 20
+    assert config.polling.on_add_quick_poll_max_concurrency == 12
     assert config.disk.downloading_states == ("downloading", "metaDL")
 
 

@@ -208,6 +208,8 @@ class ModeEngine:
                     known_soft_allowed.add(torrent.hash)
 
         for torrent in torrents:
+            if torrent.amount_left is None or torrent.amount_left <= 0:
+                continue
             if is_forced_download_state(torrent.state):
                 continue
             if not is_downloading_ish_state(torrent.state, downloading_states):
@@ -236,6 +238,8 @@ class ModeEngine:
                 await self._remove_tag(torrent.hash, soft_tag, reason="hard_cleanup")
 
         for torrent in torrents:
+            if torrent.amount_left is None or torrent.amount_left <= 0:
+                continue
             if is_forced_download_state(torrent.state):
                 continue
             if not is_downloading_ish_state(torrent.state, downloading_states):
