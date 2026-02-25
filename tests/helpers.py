@@ -37,6 +37,9 @@ def make_config(
         "allocating",
     ),
     interval_seconds: int = 30,
+    on_add_quick_poll_interval_seconds: float = 1.0,
+    on_add_quick_poll_max_attempts: int = 10,
+    on_add_quick_poll_max_concurrency: int = 32,
 ) -> AppConfig:
     """Creates a full AppConfig for tests."""
     return AppConfig(
@@ -53,7 +56,12 @@ def make_config(
             safety_buffer_gb=safety_buffer_gb,
             downloading_states=downloading_states,
         ),
-        polling=PollingConfig(interval_seconds=interval_seconds),
+        polling=PollingConfig(
+            interval_seconds=interval_seconds,
+            on_add_quick_poll_interval_seconds=on_add_quick_poll_interval_seconds,
+            on_add_quick_poll_max_attempts=on_add_quick_poll_max_attempts,
+            on_add_quick_poll_max_concurrency=on_add_quick_poll_max_concurrency,
+        ),
         resume=ResumeConfig(policy=policy, strict_fifo=strict_fifo),
         tagging=TaggingConfig(paused_tag=paused_tag, soft_allowed_tag=soft_allowed_tag),
         logging=LoggingConfig(level="DEBUG"),
@@ -107,21 +115,27 @@ class FakeQbClient:
         self,
         *,
         torrents_sequence: list[list[TorrentSnapshot]] | None = None,
+        torrent_lookup_sequence: dict[str, list[TorrentSnapshot | None]] | None = None,
         fetch_error: Exception | None = None,
+        fail_fetch_torrent: set[str] | None = None,
         fail_pause: set[str] | None = None,
         fail_resume: set[str] | None = None,
         fail_add_tag: set[tuple[str, str]] | None = None,
         fail_remove_tag: set[tuple[str, str]] | None = None,
     ) -> None:
         self._torrents_sequence = torrents_sequence or [[]]
+        self._torrent_lookup_sequence = torrent_lookup_sequence or {}
+        self._torrent_lookup_calls_by_hash: dict[str, int] = {}
         self._fetch_error = fetch_error
         self._fetch_calls = 0
 
+        self.fail_fetch_torrent = fail_fetch_torrent or set()
         self.fail_pause = fail_pause or set()
         self.fail_resume = fail_resume or set()
         self.fail_add_tag = fail_add_tag or set()
         self.fail_remove_tag = fail_remove_tag or set()
 
+        self.fetch_torrent_calls: list[str] = []
         self.pause_calls: list[str] = []
         self.resume_calls: list[str] = []
         self.add_tag_calls: list[tuple[str, str]] = []
@@ -137,6 +151,26 @@ class FakeQbClient:
             raise self._fetch_error
         index = min(self._fetch_calls - 1, len(self._torrents_sequence) - 1)
         return self._torrents_sequence[index]
+
+    async def fetch_torrent_by_hash(self, torrent_hash: str) -> TorrentSnapshot | None:
+        self.fetch_torrent_calls.append(torrent_hash)
+        if torrent_hash in self.fail_fetch_torrent:
+            raise QbittorrentUnavailableError(f"fetch torrent failed for {torrent_hash}")
+
+        lookup_sequence = self._torrent_lookup_sequence.get(torrent_hash)
+        if lookup_sequence is not None:
+            calls = self._torrent_lookup_calls_by_hash.get(torrent_hash, 0)
+            index = min(calls, len(lookup_sequence) - 1)
+            self._torrent_lookup_calls_by_hash[torrent_hash] = calls + 1
+            return lookup_sequence[index]
+
+        if not self._torrents_sequence:
+            return None
+        index = min(self._fetch_calls, len(self._torrents_sequence) - 1)
+        for torrent in self._torrents_sequence[index]:
+            if torrent.hash == torrent_hash:
+                return torrent
+        return None
 
     async def pause_torrent(self, torrent_hash: str) -> None:
         self.pause_calls.append(torrent_hash)

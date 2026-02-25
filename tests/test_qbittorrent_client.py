@@ -73,6 +73,78 @@ async def test_fetch_torrents_retries_once_after_403_with_relogin() -> None:
     assert torrents[0].tags == frozenset({"diskguard_paused", "soft_allowed"})
 
 
+async def test_fetch_torrent_by_hash_uses_filtered_info_endpoint() -> None:
+    state = {
+        "path_qs": "",
+    }
+
+    async def login_handler(_: web.Request) -> web.Response:
+        return web.Response(text="Ok.")
+
+    async def info_handler(request: web.Request) -> web.Response:
+        state["path_qs"] = request.path_qs
+        return web.json_response(
+            [
+                {
+                    "hash": "abc123",
+                    "state": "metaDL",
+                    "amount_left": 0,
+                    "priority": 1,
+                    "added_on": 123,
+                    "tags": "diskguard_paused",
+                }
+            ]
+        )
+
+    app = web.Application()
+    app.router.add_post("/api/v2/auth/login", login_handler)
+    app.router.add_get("/api/v2/torrents/info", info_handler)
+
+    async with TestServer(app) as server:
+        config = QbittorrentConfig(
+            url=str(server.make_url("/")).rstrip("/"),
+            username="admin",
+            password="password",
+        )
+        client = QbittorrentClient(config)
+        try:
+            snapshot = await client.fetch_torrent_by_hash("abc123")
+        finally:
+            await client.close()
+
+    assert state["path_qs"] == "/api/v2/torrents/info?hashes=abc123"
+    assert snapshot is not None
+    assert snapshot.hash == "abc123"
+    assert snapshot.state == "metaDL"
+    assert snapshot.amount_left == 0
+
+
+async def test_fetch_torrent_by_hash_returns_none_when_missing() -> None:
+    async def login_handler(_: web.Request) -> web.Response:
+        return web.Response(text="Ok.")
+
+    async def info_handler(_: web.Request) -> web.Response:
+        return web.json_response([])
+
+    app = web.Application()
+    app.router.add_post("/api/v2/auth/login", login_handler)
+    app.router.add_get("/api/v2/torrents/info", info_handler)
+
+    async with TestServer(app) as server:
+        config = QbittorrentConfig(
+            url=str(server.make_url("/")).rstrip("/"),
+            username="admin",
+            password="password",
+        )
+        client = QbittorrentClient(config)
+        try:
+            snapshot = await client.fetch_torrent_by_hash("missing")
+        finally:
+            await client.close()
+
+    assert snapshot is None
+
+
 async def test_fetch_application_version_uses_authenticated_endpoint() -> None:
     state = {
         "login_calls": 0,

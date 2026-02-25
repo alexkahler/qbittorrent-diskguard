@@ -33,6 +33,30 @@ async def test_normal_to_soft_transition_adds_soft_allowed_without_pausing_exist
     assert "a" not in qb.pause_calls
 
 
+async def test_normal_to_soft_transition_tags_unknown_size_downloaders_as_soft_allowed() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [],
+            [torrent("meta", state="metaDL", amount_left=0)],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=200),  # NORMAL (20%)
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT (9%)
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    await engine.tick()
+
+    assert ("meta", "soft_allowed") in qb.add_tag_calls
+    assert "meta" not in qb.pause_calls
+
+
 async def test_soft_mode_steady_enforcement_pauses_new_downloaders() -> None:
     config = make_config()
     qb = FakeQbClient(
@@ -62,6 +86,31 @@ async def test_soft_mode_steady_enforcement_pauses_new_downloaders() -> None:
     assert "new" in qb.pause_calls
     assert ("new", "diskguard_paused") in qb.add_tag_calls
     assert "old" not in qb.pause_calls
+
+
+async def test_soft_mode_ignores_unknown_size_until_size_is_known() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("new", state="downloading", amount_left=0)],
+            [torrent("new", state="downloading", amount_left=25)],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    assert qb.pause_calls == []
+
+    await engine.tick()
+    assert qb.pause_calls == ["new"]
+    assert qb.add_tag_calls == [("new", "diskguard_paused")]
 
 
 async def test_hard_mode_pauses_all_downloading_non_forced_and_cleans_soft_tags() -> None:
@@ -94,6 +143,31 @@ async def test_hard_mode_pauses_all_downloading_non_forced_and_cleans_soft_tags(
     assert "forced" not in qb.pause_calls
     assert ("base", "diskguard_paused") in qb.add_tag_calls
     assert ("x", "diskguard_paused") in qb.add_tag_calls
+
+
+async def test_hard_mode_ignores_unknown_size_until_size_is_known() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("x", state="downloading", amount_left=0)],
+            [torrent("x", state="downloading", amount_left=10)],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=40),  # HARD
+            disk_stats(total_bytes=1_000, free_bytes=40),  # HARD
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+    assert qb.pause_calls == []
+
+    await engine.tick()
+    assert qb.pause_calls == ["x"]
+    assert qb.add_tag_calls == [("x", "diskguard_paused")]
 
 
 async def test_normal_mode_self_heals_drifted_paused_tag_and_resumes_candidates() -> None:

@@ -51,28 +51,29 @@ class QbittorrentClient:
 
         torrents: list[TorrentSnapshot] = []
         for item in payload:
-            if not isinstance(item, dict):
-                continue
-            torrent_hash = str(item.get("hash", "")).strip()
-            if not torrent_hash:
-                continue
-
-            amount_left_raw = item.get("amount_left")
-            amount_left = _coerce_optional_int(amount_left_raw)
-
-            torrents.append(
-                TorrentSnapshot(
-                    hash=torrent_hash,
-                    state=str(item.get("state", "")),
-                    amount_left=amount_left,
-                    priority=_coerce_int(item.get("priority"), default=0),
-                    added_on=_coerce_int(item.get("added_on"), default=0),
-                    tags=parse_tags(_coerce_optional_string(item.get("tags"))),
-                    name=_coerce_optional_string(item.get("name")),
-                    category=_coerce_optional_string(item.get("category")),
-                )
-            )
+            parsed = _parse_torrent_item(item)
+            if parsed is not None:
+                torrents.append(parsed)
         return torrents
+
+    async def fetch_torrent_by_hash(self, torrent_hash: str) -> TorrentSnapshot | None:
+        """Fetches one torrent by hash from the qBittorrent API."""
+        payload = await self._request(
+            "GET",
+            "/api/v2/torrents/info",
+            params={"hashes": torrent_hash},
+            expect_json=True,
+        )
+        if not isinstance(payload, list):
+            raise QbittorrentRequestError("Unexpected torrents/info payload shape")
+
+        for item in payload:
+            parsed = _parse_torrent_item(item)
+            if parsed is None:
+                continue
+            if parsed.hash == torrent_hash:
+                return parsed
+        return None
 
     async def fetch_application_version(self) -> str:
         """Fetches qBittorrent application version via authenticated API call."""
@@ -294,3 +295,25 @@ def _coerce_optional_string(value: Any) -> str | None:
     if not converted:
         return None
     return converted
+
+
+def _parse_torrent_item(item: Any) -> TorrentSnapshot | None:
+    if not isinstance(item, dict):
+        return None
+    torrent_hash = str(item.get("hash", "")).strip()
+    if not torrent_hash:
+        return None
+
+    amount_left_raw = item.get("amount_left")
+    amount_left = _coerce_optional_int(amount_left_raw)
+
+    return TorrentSnapshot(
+        hash=torrent_hash,
+        state=str(item.get("state", "")),
+        amount_left=amount_left,
+        priority=_coerce_int(item.get("priority"), default=0),
+        added_on=_coerce_int(item.get("added_on"), default=0),
+        tags=parse_tags(_coerce_optional_string(item.get("tags"))),
+        name=_coerce_optional_string(item.get("name")),
+        category=_coerce_optional_string(item.get("category")),
+    )

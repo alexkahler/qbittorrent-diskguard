@@ -109,6 +109,9 @@ downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkin
 
 [polling]
 interval_seconds = 30
+on_add_quick_poll_interval_seconds = 1.0
+on_add_quick_poll_max_attempts = 10
+on_add_quick_poll_max_concurrency = 32
 
 [resume]
 policy = "priority_fifo"
@@ -213,6 +216,9 @@ Config path override:
 - `disk.resume_floor_pct = 10`
 - `disk.safety_buffer_gb = 10`
 - `polling.interval_seconds = 30`
+- `polling.on_add_quick_poll_interval_seconds = 1.0`
+- `polling.on_add_quick_poll_max_attempts = 10`
+- `polling.on_add_quick_poll_max_concurrency = 32`
 - `resume.policy = "priority_fifo"`
 - `resume.strict_fifo = true`
 - `tagging.paused_tag = "diskguard_paused"`
@@ -228,6 +234,9 @@ Config path override:
 - `DISKGUARD_DISK_WATCH_PATH=/downloads`
 - `DISKGUARD_DISK_SOFT_PAUSE_BELOW_PCT=10`
 - `DISKGUARD_SERVER_PORT=7070`
+- `DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS=1.0`
+- `DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS=10`
+- `DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY=32`
 - `DISKGUARD_RESUME_POLICY=priority_fifo`
 - `DISKGUARD_RESUME_STRICT_FIFO=true`
 - `DISKGUARD_LOGGING_LEVEL=DEBUG`

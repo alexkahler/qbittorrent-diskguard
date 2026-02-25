@@ -11,7 +11,7 @@ from aiohttp import web
 from diskguard.config import AppConfig
 from diskguard.errors import DiskProbeError, QbittorrentError
 from diskguard.models import Mode
-from diskguard.state import classify_mode
+from diskguard.state import classify_mode, is_downloading_ish_state, is_forced_download_state
 
 
 class WarningRateLimiter:
@@ -75,6 +75,10 @@ class OnAddHandler:
         self._logger = logger or logging.getLogger(__name__)
         self._warning_rate_limiter = warning_rate_limiter or WarningRateLimiter()
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._on_add_tasks_by_hash: dict[str, asyncio.Task[None]] = {}
+        self._quick_poll_semaphore = asyncio.Semaphore(
+            self._config.polling.on_add_quick_poll_max_concurrency
+        )
 
     async def handle(self, request: web.Request) -> web.Response:
         """Processes an on-add callback and schedules background work if needed.
@@ -133,12 +137,26 @@ class OnAddHandler:
         if mode is Mode.NORMAL:
             return web.json_response({"status": "ok", "action": "none", "mode": mode.value}, status=200)
 
-        # Keep the endpoint non-blocking: pause/tag work executes in background.
-        task = asyncio.create_task(self._pause_and_mark(torrent_hash, mode))
+        # Keep the endpoint non-blocking: quick-poll + pause/tag executes in background.
+        existing_task = self._on_add_tasks_by_hash.get(torrent_hash)
+        if existing_task is not None and not existing_task.done():
+            return web.json_response(
+                {"status": "accepted", "action": "quick_poll_already_scheduled", "mode": mode.value},
+                status=202,
+            )
+
+        task = asyncio.create_task(self._quick_poll_then_pause_and_mark(torrent_hash, mode))
         self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        self._on_add_tasks_by_hash[torrent_hash] = task
+
+        def _cleanup_task(done_task: asyncio.Task[None]) -> None:
+            self._background_tasks.discard(done_task)
+            if self._on_add_tasks_by_hash.get(torrent_hash) is done_task:
+                self._on_add_tasks_by_hash.pop(torrent_hash, None)
+
+        task.add_done_callback(_cleanup_task)
         return web.json_response(
-            {"status": "accepted", "action": "pause_and_mark", "mode": mode.value},
+            {"status": "accepted", "action": "quick_poll_pause_and_mark", "mode": mode.value},
             status=202,
         )
 
@@ -194,6 +212,49 @@ class OnAddHandler:
                 torrent_hash,
                 exc,
             )
+
+    async def _quick_poll_then_pause_and_mark(self, torrent_hash: str, mode: Mode) -> None:
+        """Quick-polls a single torrent until size is known, then pauses/tags it."""
+        max_attempts = self._config.polling.on_add_quick_poll_max_attempts
+        interval_seconds = self._config.polling.on_add_quick_poll_interval_seconds
+        downloading_states = self._config.disk.downloading_states
+
+        async with self._quick_poll_semaphore:
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    snapshot = await self._qb_client.fetch_torrent_by_hash(torrent_hash)
+                except QbittorrentError as exc:
+                    self._warn_rate_limited(
+                        "on_add_qb_failure",
+                        "on-add quick poll failed for torrent %s: %s",
+                        torrent_hash,
+                        exc,
+                    )
+                    return
+
+                if snapshot is not None:
+                    amount_left = snapshot.amount_left
+                    if amount_left is not None and amount_left > 0:
+                        if is_forced_download_state(snapshot.state):
+                            self._logger.debug(
+                                "on-add quick poll skipping forcedDL torrent %s in %s mode",
+                                torrent_hash,
+                                mode.value,
+                            )
+                            return
+
+                        if is_downloading_ish_state(snapshot.state, downloading_states):
+                            await self._pause_and_mark(torrent_hash, mode)
+                            return
+
+                if attempt < max_attempts:
+                    await asyncio.sleep(interval_seconds)
+
+        self._logger.debug(
+            "on-add quick poll exhausted for %s after %d attempts without pausing",
+            torrent_hash,
+            max_attempts,
+        )
 
     def _warn_rate_limited(self, key: str, message: str, *args: object) -> None:
         """Logs a warning only if rate limiter allows it.

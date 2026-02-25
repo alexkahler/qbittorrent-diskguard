@@ -40,6 +40,9 @@ downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkin
 
 [polling]
 interval_seconds = 30
+on_add_quick_poll_interval_seconds = 1.0
+on_add_quick_poll_max_attempts = 10
+on_add_quick_poll_max_concurrency = 32
 
 [resume]
 policy = "priority_fifo"
@@ -98,6 +101,9 @@ class PollingConfig:
     """Polling loop settings."""
 
     interval_seconds: int = 30
+    on_add_quick_poll_interval_seconds: float = 1.0
+    on_add_quick_poll_max_attempts: int = 10
+    on_add_quick_poll_max_concurrency: int = 32
 
 
 @dataclass(frozen=True)
@@ -248,6 +254,21 @@ ENV_OVERRIDES: dict[str, tuple[str, str, EnvParser]] = {
     "DISKGUARD_DISK_SAFETY_BUFFER_GB": ("disk", "safety_buffer_gb", _parse_float),
     "DISKGUARD_DISK_DOWNLOADING_STATES": ("disk", "downloading_states", _parse_csv),
     "DISKGUARD_POLLING_INTERVAL_SECONDS": ("polling", "interval_seconds", _parse_int),
+    "DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS": (
+        "polling",
+        "on_add_quick_poll_interval_seconds",
+        _parse_float,
+    ),
+    "DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS": (
+        "polling",
+        "on_add_quick_poll_max_attempts",
+        _parse_int,
+    ),
+    "DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY": (
+        "polling",
+        "on_add_quick_poll_max_concurrency",
+        _parse_int,
+    ),
     "DISKGUARD_RESUME_POLICY": ("resume", "policy", str),
     "DISKGUARD_RESUME_STRICT_FIFO": ("resume", "strict_fifo", _parse_bool),
     "DISKGUARD_TAGGING_PAUSED_TAG": ("tagging", "paused_tag", str),
@@ -480,7 +501,19 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
     )
 
     polling_config = PollingConfig(
-        interval_seconds=_as_int(polling_section.get("interval_seconds", 30), "polling.interval_seconds")
+        interval_seconds=_as_int(polling_section.get("interval_seconds", 30), "polling.interval_seconds"),
+        on_add_quick_poll_interval_seconds=_as_float(
+            polling_section.get("on_add_quick_poll_interval_seconds", 1.0),
+            "polling.on_add_quick_poll_interval_seconds",
+        ),
+        on_add_quick_poll_max_attempts=_as_int(
+            polling_section.get("on_add_quick_poll_max_attempts", 10),
+            "polling.on_add_quick_poll_max_attempts",
+        ),
+        on_add_quick_poll_max_concurrency=_as_int(
+            polling_section.get("on_add_quick_poll_max_concurrency", 32),
+            "polling.on_add_quick_poll_max_concurrency",
+        ),
     )
 
     tagging_config = TaggingConfig(
@@ -662,6 +695,12 @@ def _validate(config: AppConfig) -> None:
         raise ConfigError("disk.safety_buffer_gb must be non-negative")
     if config.polling.interval_seconds <= 0:
         raise ConfigError("polling.interval_seconds must be greater than zero")
+    if config.polling.on_add_quick_poll_interval_seconds <= 0:
+        raise ConfigError("polling.on_add_quick_poll_interval_seconds must be greater than zero")
+    if config.polling.on_add_quick_poll_max_attempts <= 0:
+        raise ConfigError("polling.on_add_quick_poll_max_attempts must be greater than zero")
+    if config.polling.on_add_quick_poll_max_concurrency <= 0:
+        raise ConfigError("polling.on_add_quick_poll_max_concurrency must be greater than zero")
     if config.qbittorrent.connect_timeout_seconds <= 0:
         raise ConfigError("qbittorrent.connect_timeout_seconds must be greater than zero")
     if config.qbittorrent.read_timeout_seconds <= 0:

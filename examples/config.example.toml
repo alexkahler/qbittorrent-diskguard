@@ -33,6 +33,12 @@ downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkin
 [polling]
 # Seconds between enforcement ticks. Default: 30. Type: int.
 interval_seconds = 30
+# Seconds between on-add quick poll attempts in SOFT/HARD. Default: 1.0. Type: float.
+on_add_quick_poll_interval_seconds = 1.0
+# Maximum on-add quick poll attempts per torrent hash in SOFT/HARD. Default: 10. Type: int.
+on_add_quick_poll_max_attempts = 10
+# Maximum concurrent on-add quick poll tasks. Default: 32. Type: int.
+on_add_quick_poll_max_concurrency = 32
 
 [resume]
 # Resume candidate ordering policy. Default: "priority_fifo". Type: string enum (smallest_first|priority_fifo|largest_first).
