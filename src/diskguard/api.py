@@ -92,6 +92,8 @@ class OnAddHandler:
                 {"status": "error", "message": "hash is required"},
                 status=400,
             )
+        torrent_name = _coerce_log_value(payload.get("name"))
+        torrent_category = _coerce_log_value(payload.get("category"))
 
         try:
             disk_stats = self._disk_probe.measure()
@@ -104,6 +106,29 @@ class OnAddHandler:
             soft_pause_below_pct=self._config.disk.soft_pause_below_pct,
             hard_pause_below_pct=self._config.disk.hard_pause_below_pct,
         )
+        free_gb = disk_stats.free_bytes / (1024**3)
+        used_bytes = max(disk_stats.total_bytes - disk_stats.free_bytes, 0)
+        used_gb = used_bytes / (1024**3)
+        used_pct = max(100.0 - disk_stats.free_pct, 0.0)
+
+        message = (
+            "on_add triggered hash=%s mode=%s free_gb=%.2f used_gb=%.2f free_pct=%.2f used_pct=%.2f"
+        )
+        args: list[object] = [
+            torrent_hash,
+            mode.value,
+            free_gb,
+            used_gb,
+            disk_stats.free_pct,
+            used_pct,
+        ]
+        if torrent_name is not None:
+            message += " name=%s"
+            args.append(torrent_name)
+        if torrent_category is not None:
+            message += " category=%s"
+            args.append(torrent_category)
+        self._logger.info(message, *args)
 
         if mode is Mode.NORMAL:
             return web.json_response({"status": "ok", "action": "none", "mode": mode.value}, status=200)
@@ -156,7 +181,7 @@ class OnAddHandler:
         try:
             await self._qb_client.pause_torrent(torrent_hash)
             await self._qb_client.add_tag(torrent_hash, paused_tag)
-            self._logger.info(
+            self._logger.debug(
                 "on-add paused torrent %s and added tag %s in %s mode",
                 torrent_hash,
                 paused_tag,
@@ -199,3 +224,13 @@ def create_http_app(on_add_handler: OnAddHandler) -> web.Application:
 
     app.on_shutdown.append(_on_shutdown)
     return app
+
+
+def _coerce_log_value(value: object) -> str | None:
+    """Normalizes optional payload values for single-line logs."""
+    if value is None:
+        return None
+    normalized = " ".join(str(value).split())
+    if not normalized:
+        return None
+    return normalized
