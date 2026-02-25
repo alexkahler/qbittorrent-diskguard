@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import re
+from typing import Any, Mapping
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -33,6 +35,8 @@ class QbittorrentClient:
         self._session: aiohttp.ClientSession | None = None
         self._auth_lock = asyncio.Lock()
         self._logged_in = False
+        self._detected_qbittorrent_version: str | None = None
+        self._detected_webapi_version: str | None = None
 
     async def close(self) -> None:
         """Closes the underlying HTTP session."""
@@ -75,7 +79,7 @@ class QbittorrentClient:
         await self._request(
             "POST",
             "/api/v2/torrents/pause",
-            data={"hashes": torrent_hash},
+            params={"hashes": torrent_hash},
         )
 
     async def resume_torrent(self, torrent_hash: str) -> None:
@@ -83,7 +87,7 @@ class QbittorrentClient:
         await self._request(
             "POST",
             "/api/v2/torrents/resume",
-            data={"hashes": torrent_hash},
+            params={"hashes": torrent_hash},
         )
 
     async def add_tag(self, torrent_hash: str, tag: str) -> None:
@@ -121,21 +125,26 @@ class QbittorrentClient:
                 return
 
             session = await self._ensure_session()
+            login_url = self._build_endpoint("/api/v2/auth/login")
             try:
                 async with session.post(
-                    f"{self._base_url}/api/v2/auth/login",
+                    login_url,
                     data={
                         "username": self._config.username,
                         "password": self._config.password,
                     },
                 ) as response:
+                    self._capture_detected_versions(response.headers)
                     body = await response.text()
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                raise QbittorrentUnavailableError(f"Unable to login to qBittorrent: {exc}") from exc
+                raise QbittorrentUnavailableError(
+                    f"Unable to login to qBittorrent at {login_url}: {exc}"
+                ) from exc
 
             if response.status != 200 or body.strip().lower() != "ok.":
                 raise QbittorrentAuthenticationError(
-                    f"qBittorrent login failed with status {response.status}"
+                    f"qBittorrent login POST {login_url} failed with status {response.status}"
+                    f"{self._format_detected_versions()}"
                 )
 
             self._logged_in = True
@@ -149,13 +158,15 @@ class QbittorrentClient:
         data: dict[str, Any] | None = None,
         expect_json: bool = False,
     ) -> Any:
+        request_url = self._build_request_url(path, params=params)
         for attempt in range(2):
             await self._login(force=False)
             session = await self._ensure_session()
-            url = f"{self._base_url}{path}"
+            endpoint = self._build_endpoint(path)
 
             try:
-                async with session.request(method, url, params=params, data=data) as response:
+                async with session.request(method, endpoint, params=params, data=data) as response:
+                    self._capture_detected_versions(response.headers)
                     if response.status == 403 and attempt == 0:
                         self._logged_in = False
                         await self._login(force=True)
@@ -164,11 +175,14 @@ class QbittorrentClient:
                     body = await response.text()
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 self._logged_in = False
-                raise QbittorrentUnavailableError(f"qBittorrent request failed: {exc}") from exc
+                raise QbittorrentUnavailableError(
+                    f"qBittorrent request failed for {method} {request_url}: {exc}"
+                ) from exc
 
             if response.status >= 400:
                 raise QbittorrentRequestError(
-                    f"qBittorrent {method} {path} failed with status {response.status}: {body}"
+                    f"qBittorrent {method} {request_url} failed with status {response.status}: {body}"
+                    f"{self._format_detected_versions()}"
                 )
 
             if expect_json:
@@ -176,12 +190,60 @@ class QbittorrentClient:
                     return await response.json(content_type=None)
                 except Exception as exc:  # noqa: BLE001
                     raise QbittorrentRequestError(
-                        f"qBittorrent {method} {path} returned invalid JSON"
+                        f"qBittorrent {method} {request_url} returned invalid JSON"
+                        f"{self._format_detected_versions()}"
                     ) from exc
 
             return body
 
-        raise QbittorrentAuthenticationError(f"qBittorrent {method} {path} failed after relogin")
+        raise QbittorrentAuthenticationError(
+            f"qBittorrent {method} {request_url} failed after relogin{self._format_detected_versions()}"
+        )
+
+    def _build_endpoint(self, path: str) -> str:
+        """Builds a canonical API endpoint URL from base URL and path."""
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        return f"{self._base_url}{normalized_path}"
+
+    def _build_request_url(self, path: str, *, params: Mapping[str, Any] | None = None) -> str:
+        """Builds a request URL including a URL-encoded query string."""
+        endpoint = self._build_endpoint(path)
+        if not params:
+            return endpoint
+        return f"{endpoint}?{urlencode(params, doseq=True)}"
+
+    def _capture_detected_versions(self, headers: Mapping[str, str]) -> None:
+        """Updates detected qBittorrent/WebAPI versions from response headers."""
+        qb_header_version = _coerce_optional_string(
+            headers.get("X-QBittorrent-Version") or headers.get("X-qBittorrent-Version")
+        )
+        if qb_header_version:
+            self._detected_qbittorrent_version = qb_header_version
+        else:
+            server_header = _coerce_optional_string(headers.get("Server"))
+            if server_header:
+                match = re.search(r"qBittorrent/([^\s;]+)", server_header, flags=re.IGNORECASE)
+                if match:
+                    self._detected_qbittorrent_version = match.group(1)
+
+        webapi_version = _coerce_optional_string(
+            headers.get("X-WebAPI-Version")
+            or headers.get("X-Webapi-Version")
+            or headers.get("X-API-Version")
+        )
+        if webapi_version:
+            self._detected_webapi_version = webapi_version
+
+    def _format_detected_versions(self) -> str:
+        """Returns formatted detected version context for error messages."""
+        if not self._detected_qbittorrent_version and not self._detected_webapi_version:
+            return ""
+        qbittorrent_version = self._detected_qbittorrent_version or "unknown"
+        webapi_version = self._detected_webapi_version or "unknown"
+        return (
+            f" (detected versions: qBittorrent={qbittorrent_version}, "
+            f"webapi={webapi_version})"
+        )
 
 
 def _coerce_int(value: Any, *, default: int) -> int:
