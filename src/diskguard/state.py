@@ -47,6 +47,17 @@ def is_paused_download_state(state: str) -> bool:
     return state in PAUSED_DOWNLOAD_STATES
 
 
+def is_completed_or_seeding_state(state: str, downloading_states: Iterable[str]) -> bool:
+    """Returns whether a torrent state indicates completed/seeding behavior."""
+    if is_downloading_ish_state(state, downloading_states):
+        return False
+    if is_paused_download_state(state):
+        return False
+    if state == "uploading":
+        return True
+    return state.endswith("UP")
+
+
 def is_active_downloader_for_projection(
     torrent: TorrentSnapshot,
     *,

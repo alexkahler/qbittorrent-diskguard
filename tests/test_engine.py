@@ -1,6 +1,7 @@
 """Integration-style tests for mode enforcement behavior."""
 
 import asyncio
+import logging
 
 from diskguard.engine import ModeEngine
 from diskguard.errors import QbittorrentUnavailableError
@@ -131,6 +132,82 @@ async def test_normal_mode_cleans_soft_allowed_tags() -> None:
     await engine.tick()
 
     assert ("soft", "soft_allowed") in qb.remove_tag_calls
+
+
+async def test_soft_allowed_removed_when_torrent_is_seeding_completed(
+    caplog,
+) -> None:
+    caplog.set_level(logging.INFO)
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("seed", state="uploading", amount_left=0, tags=("soft_allowed",))]
+        ]
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])  # SOFT
+    planner = ResumePlanner(config, qb)
+    logger = logging.getLogger("diskguard.engine.test")
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner, logger=logger)
+
+    await engine.tick()
+
+    assert ("seed", "soft_allowed") in qb.remove_tag_calls
+    assert "seed" not in qb.pause_calls
+    assert any(
+        record.levelno == logging.INFO
+        and record.getMessage() == "Removed soft_allowed from seed (now seeding/completed)"
+        for record in caplog.records
+    )
+
+
+async def test_soft_allowed_not_removed_while_downloading() -> None:
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("down", state="downloading", amount_left=100, tags=("soft_allowed",))]
+        ]
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])  # SOFT
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert ("down", "soft_allowed") not in qb.remove_tag_calls
+
+
+async def test_soft_allowed_seeding_cleanup_is_idempotent_without_duplicate_logs(
+    caplog,
+) -> None:
+    caplog.set_level(logging.INFO)
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("seed", state="uploading", amount_left=0, tags=("soft_allowed",))],
+            [torrent("seed", state="uploading", amount_left=0, tags=())],
+        ]
+    )
+    probe = FakeDiskProbe(
+        stats_sequence=[
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT
+            disk_stats(total_bytes=1_000, free_bytes=90),  # SOFT
+        ]
+    )
+    planner = ResumePlanner(config, qb)
+    logger = logging.getLogger("diskguard.engine.test")
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner, logger=logger)
+
+    await engine.tick()
+    await engine.tick()
+
+    assert qb.remove_tag_calls == [("seed", "soft_allowed")]
+    cleanup_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.INFO
+        and record.getMessage() == "Removed soft_allowed from seed (now seeding/completed)"
+    ]
+    assert len(cleanup_logs) == 1
 
 
 async def test_missing_watch_path_is_safe_noop_for_tick() -> None:
