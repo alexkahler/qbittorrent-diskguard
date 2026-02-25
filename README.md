@@ -9,8 +9,6 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 - Enforces SOFT and HARD disk safety modes from a polling loop.
 - Resumes only torrents tagged as paused by DiskGuard when free space has been regained.
 - Uses projection math (`amount_left`, active remaining, floor, buffer) before resuming.
-- Removes stale `diskguard_paused` tags from torrents users force-start (`forcedDL`).
-- Verifies qBittorrent URL/auth/connectivity and API compatibility during startup before serving traffic.
 
 ## What DiskGuard does not do
 
@@ -36,7 +34,7 @@ docker build -t diskguard:latest .
 ```
 
 2. Create a local config directory at `./diskguard` (DiskGuard creates `./diskguard/config.toml` on first start if missing).
-3. Add the qBittorrent on-add hook script at `./qbittorrent/config/scripts/diskguard_on_add.sh`.
+3. Optional: Add the qBittorrent on-add hook script at `./qbittorrent/config/scripts/diskguard_on_add.sh` for fast pause actions.
 4. Start services with compose.
 
 ## Example docker-compose.yml
