@@ -103,7 +103,7 @@ class QbittorrentClient:
         await self._request(
             "POST",
             "/api/v2/torrents/stop",
-            params={"hashes": torrent_hash},
+            data={"hashes": torrent_hash},
         )
 
     async def resume_torrent(self, torrent_hash: str) -> None:
@@ -111,7 +111,7 @@ class QbittorrentClient:
         await self._request(
             "POST",
             "/api/v2/torrents/start",
-            params={"hashes": torrent_hash},
+            data={"hashes": torrent_hash},
         )
 
     async def add_tag(self, torrent_hash: str, tag: str) -> None:
