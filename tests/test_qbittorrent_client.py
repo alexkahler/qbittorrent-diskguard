@@ -108,6 +108,41 @@ async def test_fetch_application_version_uses_authenticated_endpoint() -> None:
     assert version == "4.6.5"
 
 
+async def test_fetch_webapi_version_uses_authenticated_endpoint() -> None:
+    state = {
+        "login_calls": 0,
+        "webapi_version_calls": 0,
+    }
+
+    async def login_handler(_: web.Request) -> web.Response:
+        state["login_calls"] += 1
+        return web.Response(text="Ok.")
+
+    async def webapi_version_handler(_: web.Request) -> web.Response:
+        state["webapi_version_calls"] += 1
+        return web.Response(text="2.11.3")
+
+    app = web.Application()
+    app.router.add_post("/api/v2/auth/login", login_handler)
+    app.router.add_get("/api/v2/app/webapiVersion", webapi_version_handler)
+
+    async with TestServer(app) as server:
+        config = QbittorrentConfig(
+            url=str(server.make_url("/")).rstrip("/"),
+            username="admin",
+            password="password",
+        )
+        client = QbittorrentClient(config)
+        try:
+            webapi_version = await client.fetch_webapi_version()
+        finally:
+            await client.close()
+
+    assert state["login_calls"] == 1
+    assert state["webapi_version_calls"] == 1
+    assert webapi_version == "2.11.3"
+
+
 async def test_pause_resume_and_tag_operations_hit_expected_endpoints() -> None:
     captured: dict[str, dict[str, object]] = {}
 

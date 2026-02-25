@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 from urllib.parse import urlparse, urlunparse
@@ -11,6 +12,7 @@ from urllib.parse import urlparse, urlunparse
 from diskguard.errors import (
     QbittorrentAuthenticationError,
     QbittorrentError,
+    QbittorrentRequestError,
     QbittorrentUnavailableError,
     StartupPreflightError,
 )
@@ -18,7 +20,10 @@ from diskguard.errors import (
 DEFAULT_PREFLIGHT_ATTEMPTS = 10
 DEFAULT_PREFLIGHT_MAX_BACKOFF_SECONDS = 5.0
 DEFAULT_PREFLIGHT_ATTEMPT_TIMEOUT_SECONDS = 2.0
+MIN_SUPPORTED_QBITTORRENT_VERSION = (5, 1, 0)
+MIN_SUPPORTED_WEBAPI_VERSION = (2, 3, 0)
 _VALID_QBITTORRENT_URL_SCHEMES = frozenset({"http", "https"})
+_SEMVER_PREFIX_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 
 class QbittorrentVersionProbeClient(Protocol):
@@ -26,6 +31,10 @@ class QbittorrentVersionProbeClient(Protocol):
 
     async def fetch_application_version(self) -> str:
         """Returns qBittorrent application version from the authenticated API."""
+        ...
+
+    async def fetch_webapi_version(self) -> str:
+        """Returns qBittorrent Web API version from the authenticated API."""
         ...
 
 
@@ -94,14 +103,29 @@ async def run_qbittorrent_startup_preflight(
     for attempt in range(1, max_attempts + 1):
         attempt_error: QbittorrentError | None = None
         try:
-            await asyncio.wait_for(
-                qb_client.fetch_application_version(),
+            qbittorrent_version, webapi_version = await asyncio.wait_for(
+                _fetch_detected_versions(qb_client),
                 timeout=attempt_timeout_seconds,
+            )
+            _validate_minimum_supported_versions(
+                qbittorrent_version=qbittorrent_version,
+                webapi_version=webapi_version,
             )
         except TimeoutError:
             attempt_error = QbittorrentUnavailableError(
                 f"startup preflight request timed out after {attempt_timeout_seconds:.1f}s"
             )
+        except QbittorrentRequestError as exc:
+            version_probe_error = StartupPreflightError(
+                "Unable to determine qBittorrent compatibility from required version "
+                "endpoints (/api/v2/app/version, /api/v2/app/webapiVersion). "
+                f"{_format_minimum_version_requirement()} Underlying error: {exc}"
+            )
+            logger.error("qBittorrent startup preflight failed: %s", version_probe_error)
+            raise version_probe_error from exc
+        except StartupPreflightError as exc:
+            logger.error("qBittorrent startup preflight failed: %s", exc)
+            raise
         except QbittorrentError as exc:
             attempt_error = exc
 
@@ -144,6 +168,59 @@ async def run_qbittorrent_startup_preflight(
         f"qBittorrent startup preflight failed after {max_attempts} attempts "
         f"({failure_kind}): {last_error}"
     ) from last_error
+
+
+async def _fetch_detected_versions(qb_client: QbittorrentVersionProbeClient) -> tuple[str, str]:
+    """Fetches qBittorrent and Web API versions via authenticated endpoints."""
+    qbittorrent_version = await qb_client.fetch_application_version()
+    webapi_version = await qb_client.fetch_webapi_version()
+    return qbittorrent_version, webapi_version
+
+
+def _validate_minimum_supported_versions(*, qbittorrent_version: str, webapi_version: str) -> None:
+    """Validates version strings against DiskGuard's minimum supported baseline."""
+    parsed_qbittorrent = _parse_semver_prefix(qbittorrent_version)
+    parsed_webapi = _parse_semver_prefix(webapi_version)
+
+    if parsed_qbittorrent is None or parsed_webapi is None:
+        raise StartupPreflightError(
+            "Unable to parse qBittorrent API versions reported by server: "
+            f"qBittorrent='{qbittorrent_version}', webapi='{webapi_version}'. "
+            f"{_format_minimum_version_requirement()}"
+        )
+
+    if (
+        parsed_qbittorrent < MIN_SUPPORTED_QBITTORRENT_VERSION
+        or parsed_webapi < MIN_SUPPORTED_WEBAPI_VERSION
+    ):
+        raise StartupPreflightError(
+            "Incompatible qBittorrent API versions detected: "
+            f"qBittorrent={qbittorrent_version}, webapi={webapi_version}. "
+            f"{_format_minimum_version_requirement()}"
+        )
+
+
+def _parse_semver_prefix(version: str) -> tuple[int, int, int] | None:
+    """Parses a semantic version prefix (major.minor.patch) from a string."""
+    match = _SEMVER_PREFIX_PATTERN.match(version)
+    if match is None:
+        return None
+    major, minor, patch = match.groups()
+    return (int(major), int(minor), int(patch))
+
+
+def _format_minimum_version_requirement() -> str:
+    """Formats the minimum supported qBittorrent/Web API requirement."""
+    return (
+        "DiskGuard requires qBittorrent >= "
+        f"{_format_semver(MIN_SUPPORTED_QBITTORRENT_VERSION)} and Web API >= "
+        f"{_format_semver(MIN_SUPPORTED_WEBAPI_VERSION)}."
+    )
+
+
+def _format_semver(version: tuple[int, int, int]) -> str:
+    """Formats a semantic version tuple as major.minor.patch."""
+    return ".".join(str(component) for component in version)
 
 
 def _compute_retry_backoff_seconds(*, attempt: int, max_backoff_seconds: float) -> float:
