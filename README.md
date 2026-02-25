@@ -9,6 +9,7 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 - Enforces SOFT and HARD disk safety modes from a polling loop.
 - Resumes only torrents tagged as paused by DiskGuard when free space has been regained.
 - Uses projection math (`amount_left`, active remaining, floor, buffer) before resuming.
+- Removes stale `diskguard_paused` tags from torrents users force-start (`forcedDL`).
 - Verifies qBittorrent URL/auth/connectivity and API compatibility during startup before serving traffic.
 
 ## What DiskGuard does not do
@@ -230,16 +231,30 @@ Config path override:
 ### Env override examples
 
 - `DISKGUARD_CONFIG=/config/config.toml`
+- `DISKGUARD_CONFIG_PATH=/config/config.toml` (legacy fallback)
 - `DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080`
+- `DISKGUARD_QBITTORRENT_USERNAME=admin`
+- `DISKGUARD_QBITTORRENT_PASSWORD=password`
+- `DISKGUARD_QBITTORRENT_CONNECT_TIMEOUT_SECONDS=2.0`
+- `DISKGUARD_QBITTORRENT_READ_TIMEOUT_SECONDS=8.0`
+- `DISKGUARD_QBITTORRENT_TOTAL_TIMEOUT_SECONDS=12.0`
 - `DISKGUARD_DISK_WATCH_PATH=/downloads`
 - `DISKGUARD_DISK_SOFT_PAUSE_BELOW_PCT=10`
+- `DISKGUARD_DISK_HARD_PAUSE_BELOW_PCT=5`
+- `DISKGUARD_DISK_RESUME_FLOOR_PCT=10`
+- `DISKGUARD_DISK_SAFETY_BUFFER_GB=10`
+- `DISKGUARD_DISK_DOWNLOADING_STATES=downloading,metaDL,queuedDL,stalledDL,checkingDL,allocating`
+- `DISKGUARD_POLLING_INTERVAL_SECONDS=30`
 - `DISKGUARD_SERVER_PORT=7070`
 - `DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS=1.0`
 - `DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS=10`
 - `DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY=32`
 - `DISKGUARD_RESUME_POLICY=priority_fifo`
 - `DISKGUARD_RESUME_STRICT_FIFO=true`
+- `DISKGUARD_TAGGING_PAUSED_TAG=diskguard_paused`
+- `DISKGUARD_TAGGING_SOFT_ALLOWED_TAG=soft_allowed`
 - `DISKGUARD_LOGGING_LEVEL=DEBUG`
+- `DISKGUARD_SERVER_HOST=0.0.0.0`
 
 ### Server host/port behavior
 

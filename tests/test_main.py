@@ -16,10 +16,12 @@ main_module = importlib.import_module("diskguard.main")
 
 
 def test_main_exits_non_zero_when_startup_preflight_fails(monkeypatch) -> None:
+    """Tests that main exits non zero when startup preflight fails."""
     monkeypatch.setattr(main_module, "load_config", lambda: make_config())
     monkeypatch.setattr(main_module, "_configure_logging", lambda _: None)
 
     def fake_asyncio_run(coro) -> None:
+        """Fake asyncio run."""
         coro.close()
         raise StartupPreflightError("preflight failed")
 
@@ -38,10 +40,12 @@ def test_main_logs_application_version_on_startup(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that main logs application version on startup."""
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(main_module, "_configure_logging", lambda _: None)
 
     def fake_load_config():
+        """Fake load config."""
         raise ConfigError("invalid config")
 
     monkeypatch.setattr(main_module, "load_config", fake_load_config)

@@ -12,6 +12,11 @@ class DiskProbe:
     """Reads disk statistics for the configured watch path."""
 
     def __init__(self, watch_path: str):
+        """Initializes a probe bound to one filesystem path.
+
+        Args:
+            watch_path: Absolute path DiskGuard should monitor.
+        """
         self._watch_path = watch_path
 
     @property

@@ -6,6 +6,7 @@ from tests.helpers import FakeQbClient, disk_stats, make_config, torrent
 
 
 async def test_negative_or_zero_budget_means_no_resumes() -> None:
+    """Tests that negative or zero budget means no resumes."""
     config = make_config(resume_floor_pct=10.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -23,6 +24,7 @@ async def test_negative_or_zero_budget_means_no_resumes() -> None:
 
 
 async def test_missing_active_amount_left_skips_resumes_for_safety() -> None:
+    """Tests that missing active amount left skips resumes for safety."""
     config = make_config(resume_floor_pct=5.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -39,6 +41,7 @@ async def test_missing_active_amount_left_skips_resumes_for_safety() -> None:
 
 
 async def test_priority_fifo_strict_stops_at_first_non_fitting_candidate() -> None:
+    """Tests that priority fifo strict stops at first non fitting candidate."""
     config = make_config(policy=ResumePolicy.PRIORITY_FIFO, strict_fifo=True, resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -57,6 +60,7 @@ async def test_priority_fifo_strict_stops_at_first_non_fitting_candidate() -> No
 
 
 async def test_priority_fifo_skip_mode_continues_after_non_fit() -> None:
+    """Tests that priority fifo skip mode continues after non fit."""
     config = make_config(policy=ResumePolicy.PRIORITY_FIFO, strict_fifo=False, resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -73,6 +77,7 @@ async def test_priority_fifo_skip_mode_continues_after_non_fit() -> None:
 
 
 async def test_smallest_first_resumes_best_fit_order() -> None:
+    """Tests that smallest first resumes best fit order."""
     config = make_config(policy=ResumePolicy.SMALLEST_FIRST, resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -90,6 +95,7 @@ async def test_smallest_first_resumes_best_fit_order() -> None:
 
 
 async def test_largest_first_chooses_largest_that_fits_first() -> None:
+    """Tests that largest first chooses largest that fits first."""
     config = make_config(policy=ResumePolicy.LARGEST_FIRST, resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -107,6 +113,7 @@ async def test_largest_first_chooses_largest_that_fits_first() -> None:
 
 
 async def test_zero_or_invalid_amount_left_candidates_are_skipped() -> None:
+    """Tests that zero or invalid amount left candidates are skipped."""
     config = make_config(policy=ResumePolicy.PRIORITY_FIFO, strict_fifo=False, resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -124,6 +131,7 @@ async def test_zero_or_invalid_amount_left_candidates_are_skipped() -> None:
 
 
 async def test_candidate_not_in_paused_download_state_is_not_resumed() -> None:
+    """Tests that candidate not in paused download state is not resumed."""
     config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient()
     planner = ResumePlanner(config, qb)
@@ -140,6 +148,7 @@ async def test_candidate_not_in_paused_download_state_is_not_resumed() -> None:
 
 
 async def test_resume_failure_keeps_torrent_unresumed() -> None:
+    """Tests that resume failure keeps torrent unresumed."""
     config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient(fail_resume={"bad"})
     planner = ResumePlanner(config, qb)
@@ -154,6 +163,7 @@ async def test_resume_failure_keeps_torrent_unresumed() -> None:
 
 
 async def test_remove_tag_failure_after_resume_still_counts_as_resumed() -> None:
+    """Tests that remove tag failure after resume still counts as resumed."""
     config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient(fail_remove_tag={("ok", "diskguard_paused")})
     planner = ResumePlanner(config, qb)

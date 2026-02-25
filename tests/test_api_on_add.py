@@ -10,6 +10,7 @@ from tests.helpers import FakeDiskProbe, FakeQbClient, disk_stats, make_config, 
 
 
 async def test_on_add_in_normal_mode_does_nothing() -> None:
+    """Tests that on add in normal mode does nothing."""
     config = make_config()
     qb = FakeQbClient()
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
@@ -28,6 +29,7 @@ async def test_on_add_in_normal_mode_does_nothing() -> None:
 
 
 async def test_on_add_in_soft_mode_pauses_and_tags_hash() -> None:
+    """Tests that on add in soft mode pauses and tags hash."""
     config = make_config(on_add_quick_poll_interval_seconds=0.01, on_add_quick_poll_max_attempts=2)
     qb = FakeQbClient(
         torrent_lookup_sequence={
@@ -51,6 +53,7 @@ async def test_on_add_in_soft_mode_pauses_and_tags_hash() -> None:
 
 
 async def test_on_add_requires_hash() -> None:
+    """Tests that on add requires hash."""
     config = make_config()
     qb = FakeQbClient()
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])
@@ -67,6 +70,7 @@ async def test_on_add_requires_hash() -> None:
 
 
 async def test_on_add_returns_accepted_when_qb_is_temporarily_unavailable() -> None:
+    """Tests that on add returns accepted when qb is temporarily unavailable."""
     config = make_config(on_add_quick_poll_interval_seconds=0.01, on_add_quick_poll_max_attempts=1)
     qb = FakeQbClient(
         torrent_lookup_sequence={
@@ -89,6 +93,7 @@ async def test_on_add_returns_accepted_when_qb_is_temporarily_unavailable() -> N
 
 
 async def test_on_add_handles_parallel_calls_without_state_corruption() -> None:
+    """Tests that on add handles parallel calls without state corruption."""
     config = make_config(
         on_add_quick_poll_interval_seconds=0.01,
         on_add_quick_poll_max_attempts=2,
@@ -118,6 +123,7 @@ async def test_on_add_handles_parallel_calls_without_state_corruption() -> None:
 
 
 async def test_on_add_deduplicates_quick_poll_for_same_hash() -> None:
+    """Tests that on add deduplicates quick poll for same hash."""
     config = make_config(on_add_quick_poll_interval_seconds=0.05, on_add_quick_poll_max_attempts=2)
     qb = FakeQbClient(
         torrent_lookup_sequence={
@@ -148,6 +154,7 @@ async def test_on_add_deduplicates_quick_poll_for_same_hash() -> None:
 async def test_on_add_logs_info_with_hash_on_hook_call(
     caplog,
 ) -> None:
+    """Tests that on add logs info with hash on hook call."""
     caplog.set_level(logging.INFO)
     config = make_config()
     qb = FakeQbClient()
@@ -176,6 +183,7 @@ async def test_on_add_logs_info_with_hash_on_hook_call(
 async def test_on_add_logs_optional_name_and_category_when_present(
     caplog,
 ) -> None:
+    """Tests that on add logs optional name and category when present."""
     caplog.set_level(logging.INFO)
     config = make_config()
     qb = FakeQbClient()
@@ -204,6 +212,7 @@ async def test_on_add_logs_optional_name_and_category_when_present(
 
 
 async def test_on_add_quick_poll_waits_until_known_size_before_pause() -> None:
+    """Tests that on add quick poll waits until known size before pause."""
     config = make_config(on_add_quick_poll_interval_seconds=0.01, on_add_quick_poll_max_attempts=3)
     qb = FakeQbClient(
         torrent_lookup_sequence={
@@ -230,6 +239,7 @@ async def test_on_add_quick_poll_waits_until_known_size_before_pause() -> None:
 
 
 async def test_on_add_quick_poll_does_not_pause_when_size_stays_unknown() -> None:
+    """Tests that on add quick poll does not pause when size stays unknown."""
     config = make_config(on_add_quick_poll_interval_seconds=0.01, on_add_quick_poll_max_attempts=3)
     qb = FakeQbClient(
         torrent_lookup_sequence={

@@ -31,6 +31,15 @@ class ModeEngine:
         resume_planner: ResumePlanner,
         logger: logging.Logger | None = None,
     ) -> None:
+        """Initializes mode engine dependencies and transition state.
+
+        Args:
+            config: Validated DiskGuard configuration.
+            qb_client: qBittorrent API client for torrent/tag operations.
+            disk_probe: Disk measurement dependency for mode classification.
+            resume_planner: Planner used during NORMAL-mode resume evaluation.
+            logger: Optional logger used for tick diagnostics.
+        """
         self._config = config
         self._qb_client = qb_client
         self._disk_probe = disk_probe
@@ -83,6 +92,7 @@ class ModeEngine:
             self._logger.warning("qBittorrent unavailable; skipping tick: %s", exc)
             return
 
+        cleaned_forced_paused_hashes = await self._cleanup_forced_download_paused_torrents(torrents)
         cleaned_soft_allowed_hashes = await self._cleanup_soft_allowed_completed_torrents(torrents)
 
         if self._previous_mode != mode:
@@ -100,6 +110,7 @@ class ModeEngine:
             await self._handle_normal_mode(
                 torrents,
                 disk_stats,
+                cleaned_forced_paused_hashes=cleaned_forced_paused_hashes,
                 cleaned_soft_allowed_hashes=cleaned_soft_allowed_hashes,
             )
         elif mode is Mode.SOFT:
@@ -143,13 +154,53 @@ class ModeEngine:
                 removed_hashes.add(torrent.hash)
         return removed_hashes
 
+    async def _cleanup_forced_download_paused_torrents(
+        self,
+        torrents: list[TorrentSnapshot],
+    ) -> set[str]:
+        """Removes paused tag from forced downloads that users resumed manually.
+
+        Args:
+            torrents: Current torrent snapshots.
+
+        Returns:
+            Hashes where paused-tag cleanup succeeded this tick.
+        """
+        paused_tag = self._config.tagging.paused_tag
+        removed_hashes: set[str] = set()
+        for torrent in torrents:
+            if not torrent.has_tag(paused_tag):
+                continue
+            if not is_forced_download_state(torrent.state):
+                continue
+            success = await self._remove_tag(
+                torrent.hash,
+                paused_tag,
+                reason="forceddl_cleanup",
+                success_log_message="Removed managed paused tag from %s (forcedDL user override)",
+            )
+            if success:
+                removed_hashes.add(torrent.hash)
+        return removed_hashes
+
     async def _handle_normal_mode(
         self,
         torrents: list[TorrentSnapshot],
         disk_stats,
         *,
+        cleaned_forced_paused_hashes: set[str],
         cleaned_soft_allowed_hashes: set[str],
     ) -> None:
+        """Applies NORMAL-mode cleanup and resume planner execution.
+
+        Args:
+            torrents: Current torrent snapshots.
+            disk_stats: Current disk measurements used by resume planner.
+            cleaned_forced_paused_hashes: Hashes where forcedDL paused-tag
+                cleanup already succeeded this tick.
+            cleaned_soft_allowed_hashes: Hashes already cleaned during
+                completed/seeding soft-allowed cleanup in this tick.
+        """
         soft_tag = self._config.tagging.soft_allowed_tag
         paused_tag = self._config.tagging.paused_tag
 
@@ -165,6 +216,8 @@ class ModeEngine:
 
         for torrent in torrents:
             if not torrent.has_tag(paused_tag):
+                continue
+            if torrent.hash in cleaned_forced_paused_hashes:
                 continue
             if is_paused_download_state(torrent.state):
                 continue
@@ -183,6 +236,14 @@ class ModeEngine:
         entering_soft: bool,
         cleaned_soft_allowed_hashes: set[str],
     ) -> None:
+        """Applies SOFT-mode transition and steady-state enforcement rules.
+
+        Args:
+            torrents: Current torrent snapshots.
+            entering_soft: Whether this tick is a NORMAL -> SOFT transition.
+            cleaned_soft_allowed_hashes: Hashes already cleaned during
+                completed/seeding soft-allowed cleanup in this tick.
+        """
         soft_tag = self._config.tagging.soft_allowed_tag
         paused_tag = self._config.tagging.paused_tag
         downloading_states = self._config.disk.downloading_states
@@ -225,6 +286,14 @@ class ModeEngine:
         entering_hard: bool,
         cleaned_soft_allowed_hashes: set[str],
     ) -> None:
+        """Applies HARD-mode cleanup and full downloader pause enforcement.
+
+        Args:
+            torrents: Current torrent snapshots.
+            entering_hard: Whether this tick entered HARD mode from NORMAL/SOFT.
+            cleaned_soft_allowed_hashes: Hashes already cleaned during
+                completed/seeding soft-allowed cleanup in this tick.
+        """
         soft_tag = self._config.tagging.soft_allowed_tag
         downloading_states = self._config.disk.downloading_states
 
@@ -247,6 +316,11 @@ class ModeEngine:
             await self._pause_and_mark(torrent.hash)
 
     async def _pause_and_mark(self, torrent_hash: str) -> None:
+        """Pauses a torrent and applies DiskGuard's paused management tag.
+
+        Args:
+            torrent_hash: Hash of the torrent to pause and mark.
+        """
         paused_tag = self._config.tagging.paused_tag
         try:
             await self._qb_client.pause_torrent(torrent_hash)
@@ -266,6 +340,15 @@ class ModeEngine:
             )
 
     async def _add_tag(self, torrent_hash: str, tag: str) -> bool:
+        """Adds a tag to a torrent with warning-on-failure behavior.
+
+        Args:
+            torrent_hash: Hash of the torrent to mutate.
+            tag: Tag to apply.
+
+        Returns:
+            ``True`` when tag was successfully applied, otherwise ``False``.
+        """
         try:
             await self._qb_client.add_tag(torrent_hash, tag)
             self._logger.info("Added tag %s to torrent %s", tag, torrent_hash)
@@ -282,6 +365,18 @@ class ModeEngine:
         reason: str,
         success_log_message: str | None = None,
     ) -> bool:
+        """Removes a tag from a torrent with warning-on-failure behavior.
+
+        Args:
+            torrent_hash: Hash of the torrent to mutate.
+            tag: Tag to remove.
+            reason: Structured reason token for standard success logs.
+            success_log_message: Optional custom message format string used when
+                tag removal succeeds.
+
+        Returns:
+            ``True`` when tag was successfully removed, otherwise ``False``.
+        """
         try:
             await self._qb_client.remove_tag(torrent_hash, tag)
             if success_log_message is not None:

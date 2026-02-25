@@ -14,12 +14,14 @@ from tests.helpers import torrent
 
 
 def test_parse_tags_trims_and_ignores_empty_values() -> None:
+    """Tests that parse tags trims and ignores empty values."""
     assert parse_tags("foo, bar, ,baz,,") == frozenset({"foo", "bar", "baz"})
     assert parse_tags("") == frozenset()
     assert parse_tags(None) == frozenset()
 
 
 def test_mode_classification_boundaries() -> None:
+    """Tests that mode classification boundaries."""
     assert classify_mode(10.0, soft_pause_below_pct=10.0, hard_pause_below_pct=5.0).value == "NORMAL"
     assert classify_mode(9.99, soft_pause_below_pct=10.0, hard_pause_below_pct=5.0).value == "SOFT"
     assert classify_mode(5.0, soft_pause_below_pct=10.0, hard_pause_below_pct=5.0).value == "SOFT"
@@ -27,6 +29,7 @@ def test_mode_classification_boundaries() -> None:
 
 
 def test_state_classifiers() -> None:
+    """Tests that state classifiers."""
     downloading_states = ("downloading", "metaDL", "queuedDL")
     assert is_downloading_ish_state("downloading", downloading_states)
     assert is_downloading_ish_state("metaDL", downloading_states)
@@ -39,6 +42,7 @@ def test_state_classifiers() -> None:
 
 
 def test_active_downloader_projection_filter() -> None:
+    """Tests that active downloader projection filter."""
     downloading_states = ("downloading", "metaDL")
     assert is_active_downloader_for_projection(
         torrent("a", state="downloading", amount_left=10),
@@ -58,6 +62,7 @@ def test_active_downloader_projection_filter() -> None:
 
 
 def test_sort_resume_candidates_for_each_policy() -> None:
+    """Tests that sort resume candidates for each policy."""
     items = [
         torrent("a", state="pausedDL", amount_left=30, priority=1, added_on=300, tags=("diskguard_paused",)),
         torrent("b", state="pausedDL", amount_left=10, priority=2, added_on=200, tags=("diskguard_paused",)),

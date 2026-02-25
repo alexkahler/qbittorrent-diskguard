@@ -19,6 +19,13 @@ class ResumePlanner:
     """Applies projection-based resume logic using tag-truth candidates."""
 
     def __init__(self, config: AppConfig, qb_client, *, logger: logging.Logger | None = None) -> None:
+        """Initializes planner dependencies.
+
+        Args:
+            config: Validated DiskGuard configuration.
+            qb_client: qBittorrent API client used for resume and tag operations.
+            logger: Optional logger for planner diagnostics.
+        """
         self._config = config
         self._qb_client = qb_client
         self._logger = logger or logging.getLogger(__name__)
@@ -113,6 +120,14 @@ class ResumePlanner:
         )
 
     def _eligible_candidates(self, torrents: list[TorrentSnapshot]) -> list[TorrentSnapshot]:
+        """Returns paused and tagged torrents eligible for resume attempts.
+
+        Args:
+            torrents: Current torrent snapshots from qBittorrent.
+
+        Returns:
+            Resume candidates with known positive remaining size.
+        """
         paused_tag = self._config.tagging.paused_tag
         candidates: list[TorrentSnapshot] = []
         for torrent in torrents:
@@ -131,6 +146,15 @@ class ResumePlanner:
         return candidates
 
     def _calculate_active_remaining(self, torrents: list[TorrentSnapshot]) -> int | None:
+        """Calculates remaining bytes for active downloaders used in projection.
+
+        Args:
+            torrents: Current torrent snapshots from qBittorrent.
+
+        Returns:
+            Sum of remaining bytes for active downloaders, or ``None`` when any
+            active downloader has missing/invalid size.
+        """
         paused_tag = self._config.tagging.paused_tag
         downloading_states = self._config.disk.downloading_states
         total = 0
@@ -149,6 +173,14 @@ class ResumePlanner:
         return total
 
     async def _resume_candidate(self, torrent: TorrentSnapshot) -> bool:
+        """Resumes a candidate torrent and removes managed paused tag.
+
+        Args:
+            torrent: Candidate snapshot selected by the planner.
+
+        Returns:
+            ``True`` when resume succeeded, otherwise ``False``.
+        """
         paused_tag = self._config.tagging.paused_tag
         try:
             await self._qb_client.resume_torrent(torrent.hash)

@@ -26,12 +26,14 @@ class FakeVersionProbeClient:
         *,
         webapi_version_outcomes: Sequence[Exception | str] | None = None,
     ) -> None:
+        """Initializes the test helper state."""
         self._app_version_outcomes = list(app_version_outcomes)
         self._webapi_version_outcomes = list(webapi_version_outcomes or ["2.3.0"])
         self.calls = 0
         self.webapi_calls = 0
 
     async def fetch_application_version(self) -> str:
+        """Fetch application version."""
         self.calls += 1
         outcome = self._resolve_outcome(self._app_version_outcomes, self.calls)
         if isinstance(outcome, Exception):
@@ -39,6 +41,7 @@ class FakeVersionProbeClient:
         return outcome
 
     async def fetch_webapi_version(self) -> str:
+        """Fetch webapi version."""
         self.webapi_calls += 1
         outcome = self._resolve_outcome(self._webapi_version_outcomes, self.webapi_calls)
         if isinstance(outcome, Exception):
@@ -47,6 +50,7 @@ class FakeVersionProbeClient:
 
     @staticmethod
     def _resolve_outcome(outcomes: list[Exception | str], call_count: int) -> Exception | str:
+        """Resolve outcome."""
         index = min(call_count - 1, len(outcomes) - 1)
         return outcomes[index]
 
@@ -55,23 +59,28 @@ class SleepRecorder:
     """Captures requested retry sleeps without blocking tests."""
 
     def __init__(self) -> None:
+        """Initializes the test helper state."""
         self.calls: list[float] = []
 
     async def __call__(self, seconds: float) -> None:
+        """Records a simulated async sleep invocation."""
         self.calls.append(seconds)
 
 
 def test_validate_qbittorrent_url_rejects_invalid_scheme() -> None:
+    """Tests that validate qbittorrent url rejects invalid scheme."""
     with pytest.raises(StartupPreflightError):
         validate_qbittorrent_url("qbittorrent:8080")
 
 
 def test_validate_qbittorrent_url_rejects_missing_hostname() -> None:
+    """Tests that validate qbittorrent url rejects missing hostname."""
     with pytest.raises(StartupPreflightError):
         validate_qbittorrent_url("http://:8080")
 
 
 async def test_startup_preflight_retries_then_succeeds(caplog: pytest.LogCaptureFixture) -> None:
+    """Tests that startup preflight retries then succeeds."""
     caplog.set_level(logging.INFO)
     client = FakeVersionProbeClient(
         [
@@ -102,6 +111,7 @@ async def test_startup_preflight_retries_then_succeeds(caplog: pytest.LogCapture
 async def test_startup_preflight_success_log_redacts_url_credentials(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that startup preflight success log redacts url credentials."""
     caplog.set_level(logging.INFO)
     client = FakeVersionProbeClient(["5.1.0"])
     logger = logging.getLogger("diskguard.startup.test")
@@ -124,6 +134,7 @@ async def test_startup_preflight_success_log_redacts_url_credentials(
 async def test_startup_preflight_compatible_minimum_versions_passes(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that startup preflight compatible minimum versions passes."""
     caplog.set_level(logging.INFO)
     client = FakeVersionProbeClient(
         ["5.1.0"],
@@ -146,6 +157,7 @@ async def test_startup_preflight_compatible_minimum_versions_passes(
 async def test_startup_preflight_incompatible_versions_fail_with_clear_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that startup preflight incompatible versions fail with clear error."""
     caplog.set_level(logging.ERROR)
     client = FakeVersionProbeClient(
         ["5.0.4"],
@@ -175,6 +187,7 @@ async def test_startup_preflight_incompatible_versions_fail_with_clear_error(
 async def test_startup_preflight_missing_webapi_version_endpoint_fails_with_actionable_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that startup preflight missing webapi version endpoint fails with actionable error."""
     caplog.set_level(logging.ERROR)
     client = FakeVersionProbeClient(
         ["5.1.0"],
@@ -206,6 +219,7 @@ async def test_startup_preflight_missing_webapi_version_endpoint_fails_with_acti
 
 
 async def test_startup_preflight_retries_then_fails(caplog: pytest.LogCaptureFixture) -> None:
+    """Tests that startup preflight retries then fails."""
     caplog.set_level(logging.WARNING)
     client = FakeVersionProbeClient([QbittorrentUnavailableError("offline")])
     sleep_recorder = SleepRecorder()
@@ -228,6 +242,7 @@ async def test_startup_preflight_retries_then_fails(caplog: pytest.LogCaptureFix
 async def test_startup_preflight_retry_and_error_logs_redact_url_credentials(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that startup preflight retry and error logs redact url credentials."""
     caplog.set_level(logging.WARNING)
     client = FakeVersionProbeClient([QbittorrentUnavailableError("offline")])
     sleep_recorder = SleepRecorder()
@@ -250,6 +265,7 @@ async def test_startup_preflight_retry_and_error_logs_redact_url_credentials(
 async def test_startup_preflight_auth_failure_surfaces_explicit_auth_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that startup preflight auth failure surfaces explicit auth error."""
     caplog.set_level(logging.WARNING)
     client = FakeVersionProbeClient([QbittorrentAuthenticationError("invalid credentials")])
     sleep_recorder = SleepRecorder()

@@ -54,6 +54,7 @@ async def _run_service(config: AppConfig) -> None:
     loop = asyncio.get_running_loop()
 
     def _request_stop() -> None:
+        """Signals the main run loop to begin graceful shutdown."""
         stop_event.set()
 
     # Use event-loop signal handlers when supported by the platform.
