@@ -102,7 +102,7 @@ class QbittorrentClient:
         """Pauses a single torrent."""
         await self._request(
             "POST",
-            "/api/v2/torrents/pause",
+            "/api/v2/torrents/stop",
             params={"hashes": torrent_hash},
         )
 
@@ -110,7 +110,7 @@ class QbittorrentClient:
         """Resumes a single torrent."""
         await self._request(
             "POST",
-            "/api/v2/torrents/resume",
+            "/api/v2/torrents/start",
             params={"hashes": torrent_hash},
         )
 

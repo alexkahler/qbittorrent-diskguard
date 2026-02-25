@@ -18,8 +18,8 @@ def test_build_endpoint_joins_base_url_and_path_without_double_slash() -> None:
     client = QbittorrentClient(config)
 
     assert (
-        client._build_endpoint("/api/v2/torrents/pause")  # noqa: SLF001
-        == "http://qb:8080/api/v2/torrents/pause"
+        client._build_endpoint("/api/v2/torrents/stop")  # noqa: SLF001
+        == "http://qb:8080/api/v2/torrents/stop"
     )
 
 
@@ -165,8 +165,8 @@ async def test_pause_resume_and_tag_operations_hit_expected_endpoints() -> None:
 
     app = web.Application()
     app.router.add_post("/api/v2/auth/login", login_handler)
-    app.router.add_post("/api/v2/torrents/pause", make_action_handler("pause"))
-    app.router.add_post("/api/v2/torrents/resume", make_action_handler("resume"))
+    app.router.add_post("/api/v2/torrents/stop", make_action_handler("pause"))
+    app.router.add_post("/api/v2/torrents/start", make_action_handler("resume"))
     app.router.add_post("/api/v2/torrents/addTags", make_action_handler("addTags"))
     app.router.add_post("/api/v2/torrents/removeTags", make_action_handler("removeTags"))
 
@@ -186,12 +186,12 @@ async def test_pause_resume_and_tag_operations_hit_expected_endpoints() -> None:
             await client.close()
 
     assert captured["pause"]["method"] == "POST"
-    assert captured["pause"]["path_qs"] == "/api/v2/torrents/pause?hashes=hash1"
+    assert captured["pause"]["path_qs"] == "/api/v2/torrents/stop?hashes=hash1"
     assert captured["pause"]["query"] == {"hashes": "hash1"}
     assert captured["pause"]["form"] == {}
 
     assert captured["resume"]["method"] == "POST"
-    assert captured["resume"]["path_qs"] == "/api/v2/torrents/resume?hashes=hash1"
+    assert captured["resume"]["path_qs"] == "/api/v2/torrents/start?hashes=hash1"
     assert captured["resume"]["query"] == {"hashes": "hash1"}
     assert captured["resume"]["form"] == {}
 
@@ -224,8 +224,8 @@ async def test_pause_and_resume_allow_pipe_delimited_hash_list() -> None:
 
     app = web.Application()
     app.router.add_post("/api/v2/auth/login", login_handler)
-    app.router.add_post("/api/v2/torrents/pause", make_action_handler("pause"))
-    app.router.add_post("/api/v2/torrents/resume", make_action_handler("resume"))
+    app.router.add_post("/api/v2/torrents/start", make_action_handler("resume"))
+    app.router.add_post("/api/v2/torrents/stop", make_action_handler("pause"))
 
     async with TestServer(app) as server:
         config = QbittorrentConfig(
@@ -259,7 +259,7 @@ async def test_pause_404_error_includes_final_endpoint_and_detected_versions() -
 
     app = web.Application()
     app.router.add_post("/api/v2/auth/login", login_handler)
-    app.router.add_post("/api/v2/torrents/pause", pause_handler)
+    app.router.add_post("/api/v2/torrents/stop", pause_handler)
 
     async with TestServer(app) as server:
         base_url = str(server.make_url("/")).rstrip("/")
@@ -276,6 +276,6 @@ async def test_pause_404_error_includes_final_endpoint_and_detected_versions() -
             await client.close()
 
     message = str(exc_info.value)
-    assert f"{base_url}/api/v2/torrents/pause?hashes=hash404" in message
+    assert f"{base_url}/api/v2/torrents/stop?hashes=hash404" in message
     assert "status 404: Not Found" in message
     assert "detected versions: qBittorrent=4.6.4, webapi=2.8.19" in message
