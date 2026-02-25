@@ -34,7 +34,7 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 docker build -t diskguard:latest .
 ```
 
-2. Create a config file at `./diskguard/config.toml`.
+2. Create a local config directory at `./diskguard` (DiskGuard creates `./diskguard/config.toml` on first start if missing).
 3. Add the qBittorrent on-add hook script at `./qbittorrent/config/scripts/diskguard_on_add.sh`.
 4. Start services with compose.
 
@@ -70,13 +70,18 @@ services:
       - DISKGUARD_SERVER_PORT=${DISKGUARD_SERVER_PORT:-7070}
     volumes:
       - /mnt/storage/downloads:/downloads:ro # qBittorrent download folder
-      - ./diskguard/config.toml:/config/config.toml:ro
+      - ./diskguard:/config
     restart: unless-stopped
 
 networks:
   media:
     driver: bridge
 ```
+
+`/config` mapping guidance:
+- Recommended: bind mount a folder (`./diskguard:/config`) so first-run bootstrap writes `./diskguard/config.toml`.
+- Also supported: named volume (example: `diskguard_config:/config`) for persistence across restarts.
+- If no `/config` volume is mapped, DiskGuard still starts and creates `/config/config.toml`, but it logs a warning because config is not persistent when the container is removed.
 
 Why set `user` on `diskguard`:
 - Bind mounts keep host file ownership/permissions.
@@ -186,6 +191,10 @@ In qBittorrent settings, set:
 ## Configuration reference
 
 DiskGuard reads `/config/config.toml` and supports flat env var overrides.
+On startup it creates `/config` and `/config/config.toml` automatically when missing.
+
+Config path override:
+- `DISKGUARD_CONFIG` can override the file path, but it must still be inside `/config`.
 
 ### Required keys
 
@@ -211,6 +220,7 @@ DiskGuard reads `/config/config.toml` and supports flat env var overrides.
 
 ### Env override examples
 
+- `DISKGUARD_CONFIG=/config/config.toml`
 - `DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080`
 - `DISKGUARD_DISK_WATCH_PATH=/downloads`
 - `DISKGUARD_DISK_SOFT_PAUSE_BELOW_PCT=10`
@@ -247,6 +257,18 @@ PYTHONPATH=src pytest
 
 - Symptom: ERROR logs about disk probe failure, no pause/resume actions.
 - Check that DiskGuard mounts the same downloads filesystem as qBittorrent.
+
+### `/config` not writable
+
+- Symptom: startup fails with `/config is not writable`.
+- Fix by mounting a writable config directory, for example `./diskguard:/config`.
+- Avoid read-only `/config` mounts, because DiskGuard writes/maintains `/config/config.toml`.
+
+### Config not persistent warning
+
+- Symptom: startup WARNING says `/config` is not backed by a Docker volume.
+- DiskGuard is running without a mapped config volume.
+- Mount `./diskguard:/config` (recommended) or `diskguard_config:/config` to persist config.
 
 ### qBittorrent auth failure
 

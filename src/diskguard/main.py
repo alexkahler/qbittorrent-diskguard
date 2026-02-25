@@ -20,10 +20,11 @@ def main() -> None:
 
     Exits with code 2 when configuration is invalid.
     """
+    _configure_logging("INFO")
+
     try:
         config = load_config()
     except ConfigError as exc:
-        logging.basicConfig(level=logging.ERROR, format=LOG_FORMAT)
         logging.getLogger(__name__).error("Configuration error: %s", exc)
         raise SystemExit(2) from exc
 
@@ -72,4 +73,4 @@ def _configure_logging(level: str) -> None:
     Args:
         level: Uppercase level name (for example, "INFO" or "DEBUG").
     """
-    logging.basicConfig(level=getattr(logging, level, logging.INFO), format=LOG_FORMAT)
+    logging.basicConfig(level=getattr(logging, level, logging.INFO), format=LOG_FORMAT, force=True)

@@ -1,3 +1,7 @@
+# DiskGuard loads config from /config/config.toml inside the container.
+# Recommended Docker mapping: ./diskguard:/config
+# On first run, DiskGuard auto-creates /config/config.toml if it is missing.
+
 [qbittorrent]
 # Base URL for qBittorrent Web API. Default: "http://qbittorrent:8080". Type: string.
 url = "http://qbittorrent:8080"
