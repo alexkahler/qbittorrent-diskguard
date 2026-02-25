@@ -68,7 +68,6 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       - DISKGUARD_SERVER_PORT=${DISKGUARD_SERVER_PORT:-7070}
-      #- DISKGUARD_DISK_WATCH_PATH=/downloads                           # Required if using non-persistent volume
       #- DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080              # Required if using non-persistent volume
       #- DISKGUARD_QBITTORRENT_USERNAME=${QBITTORRENT_USERNAME:-admin}  # Required if using non-persistent volume
       #- DISKGUARD_QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD:-adminadmin} # Required if using non-persistent volume
