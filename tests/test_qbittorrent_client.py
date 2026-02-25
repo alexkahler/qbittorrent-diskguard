@@ -10,6 +10,7 @@ from diskguard.qbittorrent import QbittorrentClient
 
 
 def test_build_endpoint_joins_base_url_and_path_without_double_slash() -> None:
+    """Tests that build endpoint joins base url and path without double slash."""
     config = QbittorrentConfig(
         url="http://qb:8080/",
         username="admin",
@@ -24,16 +25,19 @@ def test_build_endpoint_joins_base_url_and_path_without_double_slash() -> None:
 
 
 async def test_fetch_torrents_retries_once_after_403_with_relogin() -> None:
+    """Tests that fetch torrents retries once after 403 with relogin."""
     state = {
         "login_calls": 0,
         "info_calls": 0,
     }
 
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         state["login_calls"] += 1
         return web.Response(text="Ok.")
 
     async def info_handler(_: web.Request) -> web.StreamResponse:
+        """Info handler."""
         state["info_calls"] += 1
         if state["info_calls"] == 1:
             return web.Response(status=403, text="Forbidden")
@@ -74,14 +78,17 @@ async def test_fetch_torrents_retries_once_after_403_with_relogin() -> None:
 
 
 async def test_fetch_torrent_by_hash_uses_filtered_info_endpoint() -> None:
+    """Tests that fetch torrent by hash uses filtered info endpoint."""
     state = {
         "path_qs": "",
     }
 
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         return web.Response(text="Ok.")
 
     async def info_handler(request: web.Request) -> web.Response:
+        """Info handler."""
         state["path_qs"] = request.path_qs
         return web.json_response(
             [
@@ -120,10 +127,13 @@ async def test_fetch_torrent_by_hash_uses_filtered_info_endpoint() -> None:
 
 
 async def test_fetch_torrent_by_hash_returns_none_when_missing() -> None:
+    """Tests that fetch torrent by hash returns none when missing."""
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         return web.Response(text="Ok.")
 
     async def info_handler(_: web.Request) -> web.Response:
+        """Info handler."""
         return web.json_response([])
 
     app = web.Application()
@@ -146,16 +156,19 @@ async def test_fetch_torrent_by_hash_returns_none_when_missing() -> None:
 
 
 async def test_fetch_application_version_uses_authenticated_endpoint() -> None:
+    """Tests that fetch application version uses authenticated endpoint."""
     state = {
         "login_calls": 0,
         "version_calls": 0,
     }
 
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         state["login_calls"] += 1
         return web.Response(text="Ok.")
 
     async def version_handler(_: web.Request) -> web.Response:
+        """Version handler."""
         state["version_calls"] += 1
         return web.Response(text="4.6.5")
 
@@ -181,16 +194,19 @@ async def test_fetch_application_version_uses_authenticated_endpoint() -> None:
 
 
 async def test_fetch_webapi_version_uses_authenticated_endpoint() -> None:
+    """Tests that fetch webapi version uses authenticated endpoint."""
     state = {
         "login_calls": 0,
         "webapi_version_calls": 0,
     }
 
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         state["login_calls"] += 1
         return web.Response(text="Ok.")
 
     async def webapi_version_handler(_: web.Request) -> web.Response:
+        """Webapi version handler."""
         state["webapi_version_calls"] += 1
         return web.Response(text="2.11.3")
 
@@ -216,13 +232,17 @@ async def test_fetch_webapi_version_uses_authenticated_endpoint() -> None:
 
 
 async def test_pause_resume_and_tag_operations_hit_expected_endpoints() -> None:
+    """Tests that pause resume and tag operations hit expected endpoints."""
     captured: dict[str, dict[str, object]] = {}
 
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         return web.Response(text="Ok.")
 
     def make_action_handler(action_name: str):
+        """Make action handler."""
         async def handler(request: web.Request) -> web.Response:
+            """Handler."""
             form_data = await request.post()
             captured[action_name] = {
                 "method": request.method,
@@ -279,13 +299,17 @@ async def test_pause_resume_and_tag_operations_hit_expected_endpoints() -> None:
 
 
 async def test_pause_and_resume_allow_pipe_delimited_hash_list() -> None:
+    """Tests that pause and resume allow pipe delimited hash list."""
     captured: dict[str, dict[str, str]] = {}
 
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         return web.Response(text="Ok.")
 
     def make_action_handler(action_name: str):
+        """Make action handler."""
         async def handler(request: web.Request) -> web.Response:
+            """Handler."""
             form_data = await request.post()
             captured[action_name] = {
                 "path_qs": request.path_qs,
@@ -323,10 +347,13 @@ async def test_pause_and_resume_allow_pipe_delimited_hash_list() -> None:
 
 
 async def test_pause_404_error_includes_final_endpoint_and_detected_versions() -> None:
+    """Tests that pause 404 error includes final endpoint and detected versions."""
     async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
         return web.Response(text="Ok.")
 
     async def pause_handler(_: web.Request) -> web.Response:
+        """Pause handler."""
         return web.Response(
             status=404,
             text="Not Found",

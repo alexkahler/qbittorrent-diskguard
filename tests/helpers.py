@@ -97,9 +97,11 @@ class FakeDiskProbe:
     error: Exception | None = None
 
     def __post_init__(self) -> None:
+        """Initializes derived fields after dataclass construction."""
         self.calls = 0
 
     def measure(self) -> DiskStats:
+        """Measure."""
         self.calls += 1
         if self.error is not None:
             raise self.error
@@ -123,6 +125,7 @@ class FakeQbClient:
         fail_add_tag: set[tuple[str, str]] | None = None,
         fail_remove_tag: set[tuple[str, str]] | None = None,
     ) -> None:
+        """Initializes the test helper state."""
         self._torrents_sequence = torrents_sequence or [[]]
         self._torrent_lookup_sequence = torrent_lookup_sequence or {}
         self._torrent_lookup_calls_by_hash: dict[str, int] = {}
@@ -143,9 +146,11 @@ class FakeQbClient:
 
     @property
     def fetch_calls(self) -> int:
+        """Fetch calls."""
         return self._fetch_calls
 
     async def fetch_torrents(self) -> list[TorrentSnapshot]:
+        """Fetch torrents."""
         self._fetch_calls += 1
         if self._fetch_error is not None:
             raise self._fetch_error
@@ -153,6 +158,7 @@ class FakeQbClient:
         return self._torrents_sequence[index]
 
     async def fetch_torrent_by_hash(self, torrent_hash: str) -> TorrentSnapshot | None:
+        """Fetch torrent by hash."""
         self.fetch_torrent_calls.append(torrent_hash)
         if torrent_hash in self.fail_fetch_torrent:
             raise QbittorrentUnavailableError(f"fetch torrent failed for {torrent_hash}")
@@ -173,26 +179,31 @@ class FakeQbClient:
         return None
 
     async def pause_torrent(self, torrent_hash: str) -> None:
+        """Pause torrent."""
         self.pause_calls.append(torrent_hash)
         if torrent_hash in self.fail_pause:
             raise QbittorrentUnavailableError(f"pause failed for {torrent_hash}")
 
     async def resume_torrent(self, torrent_hash: str) -> None:
+        """Resume torrent."""
         self.resume_calls.append(torrent_hash)
         if torrent_hash in self.fail_resume:
             raise QbittorrentUnavailableError(f"resume failed for {torrent_hash}")
 
     async def add_tag(self, torrent_hash: str, tag: str) -> None:
+        """Add tag."""
         self.add_tag_calls.append((torrent_hash, tag))
         if (torrent_hash, tag) in self.fail_add_tag:
             raise QbittorrentUnavailableError(f"add tag failed for {torrent_hash}")
 
     async def remove_tag(self, torrent_hash: str, tag: str) -> None:
+        """Remove tag."""
         self.remove_tag_calls.append((torrent_hash, tag))
         if (torrent_hash, tag) in self.fail_remove_tag:
             raise QbittorrentUnavailableError(f"remove tag failed for {torrent_hash}")
 
     async def close(self) -> None:
+        """Close."""
         return None
 
 

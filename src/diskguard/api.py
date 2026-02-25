@@ -150,6 +150,11 @@ class OnAddHandler:
         self._on_add_tasks_by_hash[torrent_hash] = task
 
         def _cleanup_task(done_task: asyncio.Task[None]) -> None:
+            """Removes completed quick-poll tasks from tracking collections.
+
+            Args:
+                done_task: Background task that has completed execution.
+            """
             self._background_tasks.discard(done_task)
             if self._on_add_tasks_by_hash.get(torrent_hash) is done_task:
                 self._on_add_tasks_by_hash.pop(torrent_hash, None)
@@ -281,6 +286,7 @@ def create_http_app(on_add_handler: OnAddHandler) -> web.Application:
     app.router.add_post("/on-add", on_add_handler.handle)
 
     async def _on_shutdown(_: web.Application) -> None:
+        """Awaits handler background tasks during application shutdown."""
         await on_add_handler.shutdown()
 
     app.on_shutdown.append(_on_shutdown)

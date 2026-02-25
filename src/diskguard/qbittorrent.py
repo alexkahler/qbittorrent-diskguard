@@ -29,6 +29,12 @@ class QbittorrentClient:
         *,
         logger: logging.Logger | None = None,
     ) -> None:
+        """Initializes client configuration and HTTP/session state.
+
+        Args:
+            config: qBittorrent connection and timeout settings.
+            logger: Optional logger used for client diagnostics.
+        """
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
         self._base_url = config.url.rstrip("/")
@@ -132,6 +138,11 @@ class QbittorrentClient:
         )
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
+        """Returns an active HTTP session, creating one when needed.
+
+        Returns:
+            Reusable aiohttp client session configured with bounded timeouts.
+        """
         if self._session and not self._session.closed:
             return self._session
 
@@ -145,6 +156,15 @@ class QbittorrentClient:
         return self._session
 
     async def _login(self, *, force: bool = False) -> None:
+        """Authenticates the current session against qBittorrent.
+
+        Args:
+            force: Re-authenticate even when already marked logged in.
+
+        Raises:
+            QbittorrentUnavailableError: If login request could not be sent.
+            QbittorrentAuthenticationError: If credentials/session are rejected.
+        """
         async with self._auth_lock:
             if self._logged_in and not force:
                 return
@@ -184,6 +204,23 @@ class QbittorrentClient:
         data: dict[str, Any] | None = None,
         expect_json: bool = False,
     ) -> Any:
+        """Sends an authenticated qBittorrent API request with one relogin retry.
+
+        Args:
+            method: HTTP method.
+            path: Relative API path.
+            params: Optional query parameters.
+            data: Optional form body.
+            expect_json: Whether to decode response body as JSON.
+
+        Returns:
+            Parsed JSON payload when ``expect_json`` is true; otherwise text body.
+
+        Raises:
+            QbittorrentUnavailableError: If request cannot reach qBittorrent.
+            QbittorrentRequestError: If response status or payload is invalid.
+            QbittorrentAuthenticationError: If auth still fails after relogin.
+        """
         request_url = self._build_request_url(path, params=params)
         for attempt in range(2):
             await self._login(force=False)
@@ -273,6 +310,15 @@ class QbittorrentClient:
 
 
 def _coerce_int(value: Any, *, default: int) -> int:
+    """Coerces a value to int and falls back to default on parse failure.
+
+    Args:
+        value: Raw value to coerce.
+        default: Fallback value when coercion fails.
+
+    Returns:
+        Parsed integer value or ``default``.
+    """
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -280,6 +326,14 @@ def _coerce_int(value: Any, *, default: int) -> int:
 
 
 def _coerce_optional_int(value: Any) -> int | None:
+    """Coerces a value to optional int.
+
+    Args:
+        value: Raw value from API payload.
+
+    Returns:
+        Parsed integer or ``None`` when missing/invalid.
+    """
     if value is None:
         return None
     try:
@@ -289,6 +343,14 @@ def _coerce_optional_int(value: Any) -> int | None:
 
 
 def _coerce_optional_string(value: Any) -> str | None:
+    """Coerces a value to optional non-empty string.
+
+    Args:
+        value: Raw value from API payload.
+
+    Returns:
+        Trimmed string or ``None`` when missing/empty.
+    """
     if value is None:
         return None
     converted = str(value).strip()
@@ -298,6 +360,14 @@ def _coerce_optional_string(value: Any) -> str | None:
 
 
 def _parse_torrent_item(item: Any) -> TorrentSnapshot | None:
+    """Parses one torrents/info item into a ``TorrentSnapshot``.
+
+    Args:
+        item: Raw API list element.
+
+    Returns:
+        Parsed torrent snapshot, or ``None`` when payload is invalid.
+    """
     if not isinstance(item, dict):
         return None
     torrent_hash = str(item.get("hash", "")).strip()

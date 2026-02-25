@@ -11,6 +11,7 @@ from diskguard.errors import ConfigError
 
 
 def test_load_config_reads_defaults(tmp_path: Path) -> None:
+    """Tests that load config reads defaults."""
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -37,6 +38,7 @@ watch_path = "/downloads"
 
 
 def test_load_config_defaults_watch_path_when_missing(tmp_path: Path) -> None:
+    """Tests that load config defaults watch path when missing."""
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -53,6 +55,7 @@ password = "password"
 
 
 def test_load_config_applies_flat_env_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests that load config applies flat env overrides."""
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -90,6 +93,7 @@ strict_fifo = true
 
 
 def test_load_config_rejects_invalid_thresholds(tmp_path: Path) -> None:
+    """Tests that load config rejects invalid thresholds."""
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """
@@ -111,6 +115,7 @@ hard_pause_below_pct = 5
 
 
 def test_load_config_bootstraps_default_template_when_missing(tmp_path: Path) -> None:
+    """Tests that load config bootstraps default template when missing."""
     config_file = tmp_path / "config" / "config.toml"
 
     config = load_config(str(config_file))
@@ -125,6 +130,7 @@ def test_load_config_bootstraps_default_template_when_missing(tmp_path: Path) ->
 
 
 def test_load_config_does_not_overwrite_existing_file(tmp_path: Path) -> None:
+    """Tests that load config does not overwrite existing file."""
     config_file = tmp_path / "config.toml"
     original = """
 [qbittorrent]
@@ -145,6 +151,7 @@ def test_load_config_fails_when_config_directory_not_writable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Tests that load config fails when config directory not writable."""
     config_file = tmp_path / "config" / "config.toml"
     monkeypatch.setattr(config_module, "_is_directory_writable", lambda _: False)
 
@@ -157,6 +164,7 @@ def test_load_config_warns_when_config_root_is_not_mount(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Tests that load config warns when config root is not mount."""
     config_root = tmp_path / "config-root"
     monkeypatch.setattr(config_module, "CONFIG_ROOT_PATH", config_root)
     monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", str(config_root / "config.toml"))
@@ -178,6 +186,7 @@ def test_load_config_rejects_env_path_outside_config_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Tests that load config rejects env path outside config root."""
     monkeypatch.setenv(config_module.ENV_CONFIG_PATH, str(tmp_path / "config.toml"))
     monkeypatch.delenv(config_module.LEGACY_ENV_CONFIG_PATH, raising=False)
 

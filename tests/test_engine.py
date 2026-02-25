@@ -10,6 +10,7 @@ from tests.helpers import FakeDiskProbe, FakeQbClient, disk_stats, make_config, 
 
 
 async def test_normal_to_soft_transition_adds_soft_allowed_without_pausing_existing_downloaders() -> None:
+    """Tests that normal to soft transition adds soft allowed without pausing existing downloaders."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -34,6 +35,7 @@ async def test_normal_to_soft_transition_adds_soft_allowed_without_pausing_exist
 
 
 async def test_normal_to_soft_transition_tags_unknown_size_downloaders_as_soft_allowed() -> None:
+    """Tests that normal to soft transition tags unknown size downloaders as soft allowed."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -58,6 +60,7 @@ async def test_normal_to_soft_transition_tags_unknown_size_downloaders_as_soft_a
 
 
 async def test_soft_mode_steady_enforcement_pauses_new_downloaders() -> None:
+    """Tests that soft mode steady enforcement pauses new downloaders."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -89,6 +92,7 @@ async def test_soft_mode_steady_enforcement_pauses_new_downloaders() -> None:
 
 
 async def test_soft_mode_ignores_unknown_size_until_size_is_known() -> None:
+    """Tests that soft mode ignores unknown size until size is known."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -114,6 +118,7 @@ async def test_soft_mode_ignores_unknown_size_until_size_is_known() -> None:
 
 
 async def test_hard_mode_pauses_all_downloading_non_forced_and_cleans_soft_tags() -> None:
+    """Tests that hard mode pauses all downloading non forced and cleans soft tags."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -145,7 +150,44 @@ async def test_hard_mode_pauses_all_downloading_non_forced_and_cleans_soft_tags(
     assert ("x", "diskguard_paused") in qb.add_tag_calls
 
 
+async def test_soft_mode_removes_paused_tag_from_forced_download() -> None:
+    """Tests that soft mode removes paused tag from forced download."""
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("forced", state="forcedDL", amount_left=10, tags=("diskguard_paused",))]
+        ]
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])  # SOFT
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert ("forced", "diskguard_paused") in qb.remove_tag_calls
+    assert "forced" not in qb.pause_calls
+
+
+async def test_hard_mode_removes_paused_tag_from_forced_download() -> None:
+    """Tests that hard mode removes paused tag from forced download."""
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [torrent("forced", state="forcedDL", amount_left=10, tags=("diskguard_paused",))]
+        ]
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=40)])  # HARD
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert ("forced", "diskguard_paused") in qb.remove_tag_calls
+    assert "forced" not in qb.pause_calls
+
+
 async def test_hard_mode_ignores_unknown_size_until_size_is_known() -> None:
+    """Tests that hard mode ignores unknown size until size is known."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -170,7 +212,39 @@ async def test_hard_mode_ignores_unknown_size_until_size_is_known() -> None:
     assert qb.add_tag_calls == [("x", "diskguard_paused")]
 
 
+async def test_forced_download_paused_tag_cleanup_failure_does_not_abort_tick(
+    caplog,
+) -> None:
+    """Tests that forcedDL paused-tag cleanup failures do not abort the tick."""
+    caplog.set_level(logging.WARNING)
+    config = make_config()
+    qb = FakeQbClient(
+        torrents_sequence=[
+            [
+                torrent("forced", state="forcedDL", amount_left=10, tags=("diskguard_paused",)),
+                torrent("down", state="downloading", amount_left=20),
+            ]
+        ],
+        fail_remove_tag={("forced", "diskguard_paused")},
+    )
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=40)])  # HARD
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine.tick()
+
+    assert ("forced", "diskguard_paused") in qb.remove_tag_calls
+    assert "forced" not in qb.pause_calls
+    assert "down" in qb.pause_calls
+    assert any(
+        record.levelno == logging.WARNING
+        and "Failed to remove tag diskguard_paused from torrent forced" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 async def test_normal_mode_self_heals_drifted_paused_tag_and_resumes_candidates() -> None:
+    """Tests that normal mode self heals drifted paused tag and resumes candidates."""
     config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient(
         torrents_sequence=[
@@ -191,6 +265,7 @@ async def test_normal_mode_self_heals_drifted_paused_tag_and_resumes_candidates(
 
 
 async def test_normal_mode_cleans_soft_allowed_tags() -> None:
+    """Tests that normal mode cleans soft allowed tags."""
     config = make_config(resume_floor_pct=0.0, safety_buffer_gb=0.0)
     qb = FakeQbClient(
         torrents_sequence=[
@@ -211,6 +286,7 @@ async def test_normal_mode_cleans_soft_allowed_tags() -> None:
 async def test_soft_allowed_removed_when_torrent_is_seeding_completed(
     caplog,
 ) -> None:
+    """Tests that soft allowed removed when torrent is seeding completed."""
     caplog.set_level(logging.INFO)
     config = make_config()
     qb = FakeQbClient(
@@ -235,6 +311,7 @@ async def test_soft_allowed_removed_when_torrent_is_seeding_completed(
 
 
 async def test_soft_allowed_not_removed_while_downloading() -> None:
+    """Tests that soft allowed not removed while downloading."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -253,6 +330,7 @@ async def test_soft_allowed_not_removed_while_downloading() -> None:
 async def test_soft_allowed_seeding_cleanup_is_idempotent_without_duplicate_logs(
     caplog,
 ) -> None:
+    """Tests that soft allowed seeding cleanup is idempotent without duplicate logs."""
     caplog.set_level(logging.INFO)
     config = make_config()
     qb = FakeQbClient(
@@ -285,6 +363,7 @@ async def test_soft_allowed_seeding_cleanup_is_idempotent_without_duplicate_logs
 
 
 async def test_missing_watch_path_is_safe_noop_for_tick() -> None:
+    """Tests that missing watch path is safe noop for tick."""
     config = make_config()
     qb = FakeQbClient(torrents_sequence=[[torrent("x", state="downloading", amount_left=10)]])
     probe = FakeDiskProbe(stats_sequence=None, error=missing_path_error())
@@ -299,6 +378,7 @@ async def test_missing_watch_path_is_safe_noop_for_tick() -> None:
 
 
 async def test_qbittorrent_unreachable_skips_tick_without_actions() -> None:
+    """Tests that qbittorrent unreachable skips tick without actions."""
     config = make_config()
     qb = FakeQbClient(fetch_error=QbittorrentUnavailableError("offline"))
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])
@@ -313,6 +393,7 @@ async def test_qbittorrent_unreachable_skips_tick_without_actions() -> None:
 
 
 async def test_run_forever_recovers_from_tick_exception_and_stops() -> None:
+    """Tests that run forever recovers from tick exception and stops."""
     config = make_config(interval_seconds=0)
     qb = FakeQbClient()
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
@@ -322,6 +403,7 @@ async def test_run_forever_recovers_from_tick_exception_and_stops() -> None:
     calls: list[int] = []
 
     async def fake_tick() -> None:
+        """Fake tick."""
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("boom")
@@ -333,6 +415,7 @@ async def test_run_forever_recovers_from_tick_exception_and_stops() -> None:
 
 
 async def test_soft_transition_skips_forced_non_downloading_and_existing_soft_allowed() -> None:
+    """Tests that soft transition skips forced non downloading and existing soft allowed."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -366,6 +449,7 @@ async def test_soft_transition_skips_forced_non_downloading_and_existing_soft_al
 
 
 async def test_hard_mode_ignores_non_downloading_states() -> None:
+    """Tests that hard mode ignores non downloading states."""
     config = make_config()
     qb = FakeQbClient(
         torrents_sequence=[
@@ -393,6 +477,7 @@ async def test_hard_mode_ignores_non_downloading_states() -> None:
 
 
 async def test_pause_and_mark_stops_when_pause_fails() -> None:
+    """Tests that pause and mark stops when pause fails."""
     config = make_config()
     qb = FakeQbClient(fail_pause={"x"})
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
@@ -406,6 +491,7 @@ async def test_pause_and_mark_stops_when_pause_fails() -> None:
 
 
 async def test_pause_and_mark_continues_when_add_tag_fails() -> None:
+    """Tests that pause and mark continues when add tag fails."""
     config = make_config()
     qb = FakeQbClient(fail_add_tag={("x", "diskguard_paused")})
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
@@ -419,6 +505,7 @@ async def test_pause_and_mark_continues_when_add_tag_fails() -> None:
 
 
 async def test_add_and_remove_tag_helpers_return_false_on_failure() -> None:
+    """Tests that add and remove tag helpers return false on failure."""
     config = make_config()
     qb = FakeQbClient(
         fail_add_tag={("x", "soft_allowed")},
