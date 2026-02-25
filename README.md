@@ -9,6 +9,7 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 - Enforces SOFT and HARD disk safety modes from a polling loop.
 - Resumes only torrents tagged as paused by DiskGuard when free space has been regained.
 - Uses projection math (`amount_left`, active remaining, floor, buffer) before resuming.
+- Verifies qBittorrent URL/auth/connectivity during startup before serving traffic.
 
 ## What DiskGuard does not do
 
@@ -116,6 +117,8 @@ host = "0.0.0.0"
 port = 7070
 ```
 
+> Find a fully commented `config.toml` file in the [examples folder](/examples/config.example.toml).
+
 If you want a different API port, set one variable in your compose `.env`:
 
 ```dotenv
@@ -144,6 +147,8 @@ curl -fsS -m 2 \
 
 exit 0
 ```
+
+> Find a copy-paste ready `diskguard_on_add.sh` shell script in the [examples folder](/examples/diskguard_on_add.sh).
 
 How this resolves the port:
 - The script runs inside the qBittorrent container.
@@ -244,7 +249,7 @@ PYTHONPATH=src pytest
 
 ### qBittorrent auth failure
 
-- Symptom: WARNING logs about login failure or 403 responses.
+- Symptom: startup retries followed by ERROR preflight failure, or WARNING logs during runtime ticks.
 - Verify `qbittorrent.url`, username, password in `/config/config.toml`.
 
 ### Network failure between containers

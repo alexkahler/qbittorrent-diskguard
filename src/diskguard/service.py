@@ -13,6 +13,7 @@ from diskguard.disk_probe import DiskProbe
 from diskguard.engine import ModeEngine
 from diskguard.qbittorrent import QbittorrentClient
 from diskguard.resume_planner import ResumePlanner
+from diskguard.startup import run_qbittorrent_startup_preflight
 
 
 class DiskGuardService:
@@ -43,6 +44,17 @@ class DiskGuardService:
     async def start(self) -> None:
         """Starts HTTP listener and polling loop."""
         self._qb_client = QbittorrentClient(self._config.qbittorrent, logger=self._logger)
+        try:
+            await run_qbittorrent_startup_preflight(
+                self._qb_client,
+                qb_url=self._config.qbittorrent.url,
+                logger=self._logger,
+            )
+        except Exception:  # noqa: BLE001
+            await self._qb_client.close()
+            self._qb_client = None
+            raise
+
         disk_probe = DiskProbe(self._config.disk.watch_path)
         resume_planner = ResumePlanner(self._config, self._qb_client, logger=self._logger)
         mode_engine = ModeEngine(

@@ -9,6 +9,7 @@ import signal
 from diskguard.config import load_config
 from diskguard.config import AppConfig
 from diskguard.errors import ConfigError
+from diskguard.errors import StartupPreflightError
 from diskguard.service import DiskGuardService
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -30,6 +31,8 @@ def main() -> None:
 
     try:
         asyncio.run(_run_service(config))
+    except StartupPreflightError:
+        raise SystemExit(1)
     except KeyboardInterrupt:
         pass
 

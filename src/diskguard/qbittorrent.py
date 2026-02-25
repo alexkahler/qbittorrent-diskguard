@@ -74,6 +74,18 @@ class QbittorrentClient:
             )
         return torrents
 
+    async def fetch_application_version(self) -> str:
+        """Fetches qBittorrent application version via authenticated API call."""
+        payload = await self._request("GET", "/api/v2/app/version")
+        version = str(payload).strip()
+        if not version:
+            request_url = self._build_request_url("/api/v2/app/version")
+            raise QbittorrentRequestError(
+                f"qBittorrent GET {request_url} returned an empty version payload"
+                f"{self._format_detected_versions()}"
+            )
+        return version
+
     async def pause_torrent(self, torrent_hash: str) -> None:
         """Pauses a single torrent."""
         await self._request(
@@ -143,7 +155,8 @@ class QbittorrentClient:
 
             if response.status != 200 or body.strip().lower() != "ok.":
                 raise QbittorrentAuthenticationError(
-                    f"qBittorrent login POST {login_url} failed with status {response.status}"
+                    f"qBittorrent authentication failed for POST {login_url}"
+                    f" (status {response.status})"
                     f"{self._format_detected_versions()}"
                 )
 
