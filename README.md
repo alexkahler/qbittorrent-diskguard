@@ -9,7 +9,7 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 - Enforces SOFT and HARD disk safety modes from a polling loop.
 - Resumes only torrents tagged as paused by DiskGuard when free space has been regained.
 - Uses projection math (`amount_left`, active remaining, floor, buffer) before resuming.
-- Verifies qBittorrent URL/auth/connectivity during startup before serving traffic.
+- Verifies qBittorrent URL/auth/connectivity and API compatibility during startup before serving traffic.
 
 ## What DiskGuard does not do
 
@@ -23,6 +23,7 @@ It uses a tag-truth model (`diskguard_paused`, `soft_allowed`) and never keeps l
 
 - Docker and docker-compose (or equivalent).
 - qBittorrent Web API reachable from DiskGuard container.
+- qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
 - DiskGuard container must mount the same filesystem qBittorrent writes downloads to.
 
 ## Installation
@@ -251,6 +252,12 @@ PYTHONPATH=src pytest
 
 - Symptom: startup retries followed by ERROR preflight failure, or WARNING logs during runtime ticks.
 - Verify `qbittorrent.url`, username, password in `/config/config.toml`.
+
+### qBittorrent version incompatibility
+
+- Symptom: startup fails immediately with an incompatible version ERROR message.
+- Required minimum: qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
+- Upgrade qBittorrent, then restart DiskGuard.
 
 ### Network failure between containers
 

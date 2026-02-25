@@ -86,6 +86,18 @@ class QbittorrentClient:
             )
         return version
 
+    async def fetch_webapi_version(self) -> str:
+        """Fetches qBittorrent Web API version via authenticated API call."""
+        payload = await self._request("GET", "/api/v2/app/webapiVersion")
+        version = str(payload).strip()
+        if not version:
+            request_url = self._build_request_url("/api/v2/app/webapiVersion")
+            raise QbittorrentRequestError(
+                f"qBittorrent GET {request_url} returned an empty Web API version payload"
+                f"{self._format_detected_versions()}"
+            )
+        return version
+
     async def pause_torrent(self, torrent_hash: str) -> None:
         """Pauses a single torrent."""
         await self._request(
