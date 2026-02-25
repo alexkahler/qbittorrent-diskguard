@@ -87,12 +87,13 @@ class ModeEngine:
 
         if self._previous_mode != mode:
             if self._previous_mode is None:
-                self._logger.info("DiskGuard mode initialized to %s", mode.value)
+                self._logger.info("DiskGuard mode initialized to %s. Free pct: %.2f", mode.value, disk_stats.free_pct)
             else:
                 self._logger.info(
-                    "DiskGuard mode transition: %s -> %s",
+                    "DiskGuard mode transition: %s -> %s. Free pct: %.2f",
                     self._previous_mode.value,
                     mode.value,
+                    disk_stats.free_pct,
                 )
 
         if mode is Mode.NORMAL:

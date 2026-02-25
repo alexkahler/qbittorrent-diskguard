@@ -11,6 +11,7 @@ from diskguard.config import AppConfig
 from diskguard.errors import ConfigError
 from diskguard.errors import StartupPreflightError
 from diskguard.service import DiskGuardService
+from diskguard.version import APP_VERSION
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
@@ -21,6 +22,7 @@ def main() -> None:
     Exits with code 2 when configuration is invalid.
     """
     _configure_logging("INFO")
+    logging.getLogger(__name__).info("Starting DiskGuard v%s", APP_VERSION)
 
     try:
         config = load_config()
