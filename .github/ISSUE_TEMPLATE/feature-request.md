@@ -1,7 +1,7 @@
 ---
-name: "[FEA]"
+name: Feature request
 about: Suggest an idea for this project
-title: ''
+title: "[FEA]"
 labels: enhancement
 assignees: alexkahler
 
