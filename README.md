@@ -45,8 +45,8 @@ services:
     container_name: qbittorrent
     networks: [media]
     environment:
-      - PUID=1000
-      - PGID=1000
+      - PUID=${PUID}
+      - PGID=${PGID}$
       - TZ=UTC
       - WEBUI_PORT=8080
       - DISKGUARD_SERVER_PORT=${DISKGUARD_SERVER_PORT:-7070}
@@ -58,7 +58,6 @@ services:
     restart: unless-stopped
 
   diskguard:
-    build: .
     image: ghcr.io/alexkahler/qbittorrent-diskguard:latest
     container_name: diskguard
     networks: [media]
