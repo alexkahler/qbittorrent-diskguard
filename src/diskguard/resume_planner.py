@@ -78,7 +78,13 @@ class ResumePlanner:
 
         for candidate in ordered_candidates:
             amount_left = candidate.amount_left
-            assert amount_left is not None and amount_left > 0
+            if amount_left is None or amount_left <= 0:
+                self._logger.debug(
+                    "Skipping candidate %s due to non-positive amount_left=%s",
+                    candidate.hash,
+                    amount_left,
+                )
+                continue
 
             fits = amount_left <= (budget - planned_remaining)
             if not fits:

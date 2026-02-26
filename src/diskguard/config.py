@@ -25,10 +25,11 @@ _NON_PERSISTENT_WARNING = (
 _NON_WRITABLE_ERROR = (
     "/config is not writable. Mount a writable volume (e.g. ./diskguard:/config)."
 )
+DEFAULT_SERVER_HOST = "0.0.0.0"  # nosec B104
 DEFAULT_CONFIG_TEMPLATE = """[qbittorrent]
 url = "http://qbittorrent:8080"
 username = "admin"
-password = "password"
+password = ""
 
 [disk]
 watch_path = "/downloads"
@@ -43,6 +44,7 @@ interval_seconds = 30
 on_add_quick_poll_interval_seconds = 1.0
 on_add_quick_poll_max_attempts = 10
 on_add_quick_poll_max_concurrency = 32
+on_add_max_pending_tasks = 64
 
 [resume]
 policy = "priority_fifo"
@@ -58,6 +60,8 @@ level = "INFO"
 [server]
 host = "0.0.0.0"
 port = 7070
+on_add_auth_token = ""
+on_add_max_body_bytes = 8192
 """
 
 DEFAULT_DOWNLOADING_STATES = (
@@ -104,6 +108,7 @@ class PollingConfig:
     on_add_quick_poll_interval_seconds: float = 1.0
     on_add_quick_poll_max_attempts: int = 10
     on_add_quick_poll_max_concurrency: int = 32
+    on_add_max_pending_tasks: int = 64
 
 
 @dataclass(frozen=True)
@@ -133,8 +138,10 @@ class LoggingConfig:
 class ServerConfig:
     """HTTP listener settings."""
 
-    host: str = "0.0.0.0"
+    host: str = DEFAULT_SERVER_HOST
     port: int = 7070
+    on_add_auth_token: str = ""
+    on_add_max_body_bytes: int = 8192
 
 
 @dataclass(frozen=True)
@@ -269,6 +276,11 @@ ENV_OVERRIDES: dict[str, tuple[str, str, EnvParser]] = {
         "on_add_quick_poll_max_concurrency",
         _parse_int,
     ),
+    "DISKGUARD_ON_ADD_MAX_PENDING_TASKS": (
+        "polling",
+        "on_add_max_pending_tasks",
+        _parse_int,
+    ),
     "DISKGUARD_RESUME_POLICY": ("resume", "policy", str),
     "DISKGUARD_RESUME_STRICT_FIFO": ("resume", "strict_fifo", _parse_bool),
     "DISKGUARD_TAGGING_PAUSED_TAG": ("tagging", "paused_tag", str),
@@ -276,6 +288,8 @@ ENV_OVERRIDES: dict[str, tuple[str, str, EnvParser]] = {
     "DISKGUARD_LOGGING_LEVEL": ("logging", "level", str),
     "DISKGUARD_SERVER_HOST": ("server", "host", str),
     "DISKGUARD_SERVER_PORT": ("server", "port", _parse_int),
+    "DISKGUARD_ON_ADD_AUTH_TOKEN": ("server", "on_add_auth_token", str),
+    "DISKGUARD_SERVER_ON_ADD_MAX_BODY_BYTES": ("server", "on_add_max_body_bytes", _parse_int),
 }
 
 
@@ -514,6 +528,10 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
             polling_section.get("on_add_quick_poll_max_concurrency", 32),
             "polling.on_add_quick_poll_max_concurrency",
         ),
+        on_add_max_pending_tasks=_as_int(
+            polling_section.get("on_add_max_pending_tasks", 64),
+            "polling.on_add_max_pending_tasks",
+        ),
     )
 
     tagging_config = TaggingConfig(
@@ -525,8 +543,17 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
     logging_config = LoggingConfig(level=log_level)
 
     server_config = ServerConfig(
-        host=str(server_section.get("host", "0.0.0.0")).strip(),
+        host=str(server_section.get("host", DEFAULT_SERVER_HOST)).strip(),
         port=_as_int(server_section.get("port", 7070), "server.port"),
+        on_add_auth_token=_require_non_empty_string(
+            server_section,
+            "on_add_auth_token",
+            "server.on_add_auth_token",
+        ),
+        on_add_max_body_bytes=_as_int(
+            server_section.get("on_add_max_body_bytes", 8192),
+            "server.on_add_max_body_bytes",
+        ),
     )
 
     app_config = AppConfig(
@@ -701,6 +728,8 @@ def _validate(config: AppConfig) -> None:
         raise ConfigError("polling.on_add_quick_poll_max_attempts must be greater than zero")
     if config.polling.on_add_quick_poll_max_concurrency <= 0:
         raise ConfigError("polling.on_add_quick_poll_max_concurrency must be greater than zero")
+    if config.polling.on_add_max_pending_tasks <= 0:
+        raise ConfigError("polling.on_add_max_pending_tasks must be greater than zero")
     if config.qbittorrent.connect_timeout_seconds <= 0:
         raise ConfigError("qbittorrent.connect_timeout_seconds must be greater than zero")
     if config.qbittorrent.read_timeout_seconds <= 0:
@@ -709,6 +738,12 @@ def _validate(config: AppConfig) -> None:
         raise ConfigError("qbittorrent.total_timeout_seconds must be greater than zero")
     if config.server.port <= 0 or config.server.port > 65535:
         raise ConfigError("server.port must be between 1 and 65535")
+    if config.server.on_add_max_body_bytes <= 0:
+        raise ConfigError("server.on_add_max_body_bytes must be greater than zero")
+    if not config.qbittorrent.password:
+        raise ConfigError("qbittorrent.password cannot be empty")
+    if not config.server.on_add_auth_token:
+        raise ConfigError("server.on_add_auth_token cannot be empty")
     if not config.tagging.paused_tag:
         raise ConfigError("tagging.paused_tag cannot be empty")
     if not config.tagging.soft_allowed_tag:
