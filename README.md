@@ -559,6 +559,7 @@ PYTHONPATH=src pytest
 ### Dependency lockfile
 
 - Runtime container installs from `requirements.lock` using `--require-hashes`.
+- Generate the lockfile with the same Python minor version as the runtime image/CI (`3.12`) to avoid hash-mode marker mismatches.
 - Regenerate lockfile after dependency updates:
 
 ```bash
