@@ -5,7 +5,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from diskguard.config import QbittorrentConfig
-from diskguard.errors import QbittorrentRequestError
+from diskguard.errors import QbittorrentAuthenticationError, QbittorrentRequestError
 from diskguard.qbittorrent import QbittorrentClient
 
 
@@ -382,3 +382,102 @@ async def test_pause_404_error_includes_final_endpoint_and_detected_versions() -
     assert f"{base_url}/api/v2/torrents/stop" in message
     assert "status 404: Not Found" in message
     assert "detected versions: qBittorrent=4.6.4, webapi=2.8.19" in message
+
+
+async def test_request_error_redacts_embedded_credentials() -> None:
+    """Tests that request-path errors redact credentials in endpoint URLs."""
+    async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
+        return web.Response(text="Ok.")
+
+    async def pause_handler(_: web.Request) -> web.Response:
+        """Pause handler."""
+        return web.Response(status=500, text="server failed")
+
+    app = web.Application()
+    app.router.add_post("/api/v2/auth/login", login_handler)
+    app.router.add_post("/api/v2/torrents/stop", pause_handler)
+
+    async with TestServer(app) as server:
+        base_url = str(server.make_url("/")).rstrip("/")
+        config = QbittorrentConfig(
+            url=base_url.replace("http://", "http://user:pass@"),
+            username="admin",
+            password="password",
+        )
+        client = QbittorrentClient(config)
+        try:
+            with pytest.raises(QbittorrentRequestError) as exc_info:
+                await client.pause_torrent("hash500")
+        finally:
+            await client.close()
+
+    message = str(exc_info.value)
+    assert "user:pass@" not in message
+    assert "http://<redacted>@" in message
+    assert "/api/v2/torrents/stop" in message
+
+
+async def test_authentication_error_redacts_embedded_credentials() -> None:
+    """Tests that login errors redact credentials in endpoint URLs."""
+    async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
+        return web.Response(status=403, text="Fails.")
+
+    app = web.Application()
+    app.router.add_post("/api/v2/auth/login", login_handler)
+
+    async with TestServer(app) as server:
+        base_url = str(server.make_url("/")).rstrip("/")
+        config = QbittorrentConfig(
+            url=base_url.replace("http://", "http://user:pass@"),
+            username="admin",
+            password="password",
+        )
+        client = QbittorrentClient(config)
+        try:
+            with pytest.raises(QbittorrentAuthenticationError) as exc_info:
+                await client.pause_torrent("hash403")
+        finally:
+            await client.close()
+
+    message = str(exc_info.value)
+    assert "user:pass@" not in message
+    assert "http://<redacted>@" in message
+    assert "/api/v2/auth/login" in message
+
+
+async def test_request_error_sanitizes_and_truncates_response_body() -> None:
+    """Tests that response bodies are sanitized and length-limited in errors."""
+    async def login_handler(_: web.Request) -> web.Response:
+        """Login handler."""
+        return web.Response(text="Ok.")
+
+    noisy_body = f"line one\nline two\t{('X' * 400)}\x00\x01tail"
+
+    async def pause_handler(_: web.Request) -> web.Response:
+        """Pause handler."""
+        return web.Response(status=500, text=noisy_body)
+
+    app = web.Application()
+    app.router.add_post("/api/v2/auth/login", login_handler)
+    app.router.add_post("/api/v2/torrents/stop", pause_handler)
+
+    async with TestServer(app) as server:
+        config = QbittorrentConfig(
+            url=str(server.make_url("/")).rstrip("/"),
+            username="admin",
+            password="password",
+        )
+        client = QbittorrentClient(config)
+        try:
+            with pytest.raises(QbittorrentRequestError) as exc_info:
+                await client.pause_torrent("hash500")
+        finally:
+            await client.close()
+
+    message = str(exc_info.value)
+    assert "status 500:" in message
+    assert "\n" not in message
+    assert "\x00" not in message
+    assert "..." in message

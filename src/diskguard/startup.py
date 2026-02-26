@@ -155,7 +155,10 @@ async def run_qbittorrent_startup_preflight(
         logger.info("Connected to qBittorrent at %s", qb_url_for_logs)
         return
 
-    assert last_error is not None
+    if last_error is None:
+        raise StartupPreflightError(
+            f"qBittorrent startup preflight failed after {max_attempts} attempts without a captured error"
+        )
     failure_kind = _classify_failure(last_error)
     logger.error(
         "qBittorrent startup preflight failed after %d attempts (%s) for %s: %s",

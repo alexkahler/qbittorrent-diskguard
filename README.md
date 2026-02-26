@@ -157,9 +157,10 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       - DISKGUARD_SERVER_PORT=${DISKGUARD_SERVER_PORT:-7070}
+      - DISKGUARD_ON_ADD_AUTH_TOKEN=${DISKGUARD_ON_ADD_AUTH_TOKEN:-}
       #- DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080              # Required if not using a persistent volume
       #- DISKGUARD_QBITTORRENT_USERNAME=${QBITTORRENT_USERNAME:-admin}  # Required if not using a persistent volume
-      #- DISKGUARD_QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD:-adminadmin} # Required if not using a persistent volume
+      #- DISKGUARD_QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD:-} # Required if not using a persistent volume
     volumes:
       - /path/to/downloads:/downloads:ro # qBittorrent download folder
       - /path/to/diskguard:/config
@@ -169,6 +170,11 @@ networks:
   media:
     driver: bridge
 ```
+
+> [!SECURITY]
+> Do not publish the DiskGuard API port externally. Keep it internal to the Docker network.
+> Optional hardening for the `diskguard` service: `read_only: true`,
+> `cap_drop: ["ALL"]`, and `security_opt: ["no-new-privileges:true"]`.
 
 ---
 
@@ -249,6 +255,7 @@ docker run -d \
   --network media \
   --user 1000:1000 \
   -e DISKGUARD_SERVER_PORT=7070 \
+  -e DISKGUARD_ON_ADD_AUTH_TOKEN=your-static-token \
   -v /path/to/downloads:/downloads:ro \
   -v /path/to/diskguard:/config \
   --restart unless-stopped \
@@ -279,7 +286,7 @@ Why set `user` on `diskguard`:
 [qbittorrent]
 url = "http://qbittorrent:8080" # Required
 username = "admin"              # Required
-password = "password"           # Required
+password = ""                   # Required (must be non-empty)
 
 [disk]
 watch_path = "/downloads"
@@ -294,6 +301,7 @@ interval_seconds = 30
 on_add_quick_poll_interval_seconds = 1.0
 on_add_quick_poll_max_attempts = 10
 on_add_quick_poll_max_concurrency = 32
+on_add_max_pending_tasks = 64
 
 [resume]
 policy = "priority_fifo"
@@ -309,6 +317,8 @@ level = "INFO"
 [server]
 host = "0.0.0.0"
 port = 7070
+on_add_auth_token = ""          # Required (must be non-empty)
+on_add_max_body_bytes = 8192
 ```
 
 > [!TIP]
@@ -327,6 +337,16 @@ DISKGUARD_SERVER_PORT=7171
 > [!NOTE]
 > To enable quick stopping of torrents when they are added by your *arr applications, it is recommended to set up a shell script so that DiskGuard can be notified whenever a new torrent is added.
 
+Generate a static shared secret once:
+
+```bash
+openssl rand -hex 32
+```
+
+Set the same token value in both:
+- DiskGuard `server.on_add_auth_token` (or `DISKGUARD_ON_ADD_AUTH_TOKEN`)
+- qBittorrent hook script variable `DISKGUARD_ON_ADD_AUTH_TOKEN`
+
 Create `/path/to/qbittorrent/config/scripts/diskguard_on_add.sh` (or another path which qBittorrent has access to):
 
 ```sh
@@ -336,11 +356,13 @@ Create `/path/to/qbittorrent/config/scripts/diskguard_on_add.sh` (or another pat
 HASH="$1"
 DISKGUARD_URL=diskguard # Change this to match the service name, or localhost if using Gluetun
 DISKGUARD_SERVER_PORT=7070 # Remember to update this if you have changed the default DiskGuard server port in the environment settings.
+DISKGUARD_ON_ADD_AUTH_TOKEN=your-secret-token # Set this to the same value as [server].on_add_auth_token in DiskGuard config.
 
 curl -fsS -m 2 \
   -X POST "http://${DISKGUARD_URL}:${DISKGUARD_SERVER_PORT}/on-add" \
+  -H "X-DiskGuard-Token: ${DISKGUARD_ON_ADD_AUTH_TOKEN}" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "hash=$HASH" \
+  --data-urlencode "hash=${HASH}" \
   >/dev/null 2>&1 &
 
 exit 0
@@ -356,6 +378,7 @@ exit 0
 >   - `server.port` in `config.toml`, or
 >   - `DISKGUARD_SERVER_PORT` env override in DiskGuard container.
 > - Path must be `/on-add`.
+> - Header `X-DiskGuard-Token` must match DiskGuard `server.on_add_auth_token`.
 
 > [!CAUTION]
 > If the host or port is incorrect, torrents will not be paused on add.
@@ -381,6 +404,10 @@ Finally, in **qBittorrent**, go to:
 DiskGuard reads `/config/config.toml` and supports flat environment variable overrides.
 On startup it creates `/config` and `/config/config.toml` automatically when missing.
 
+> [!IMPORTANT]
+> Bootstrapped config initializes `qbittorrent.password` and `server.on_add_auth_token`
+> as empty values. DiskGuard exits until both are set to non-empty secrets.
+
 Config path override:
 - `DISKGUARD_CONFIG` can override the file path, but it must still be inside `/config`.
 
@@ -389,6 +416,7 @@ Config path override:
 - `qbittorrent.url`
 - `qbittorrent.username`
 - `qbittorrent.password`
+- `server.on_add_auth_token`
 
 ### Defaults
 
@@ -401,6 +429,7 @@ Config path override:
 - `polling.on_add_quick_poll_interval_seconds = 1.0`
 - `polling.on_add_quick_poll_max_attempts = 10`
 - `polling.on_add_quick_poll_max_concurrency = 32`
+- `polling.on_add_max_pending_tasks = 64`
 - `resume.policy = "priority_fifo"`
 - `resume.strict_fifo = true`
 - `tagging.paused_tag = "diskguard_paused"`
@@ -408,6 +437,7 @@ Config path override:
 - `logging.level = "INFO"`
 - `server.host = "0.0.0.0"`
 - `server.port = 7070`
+- `server.on_add_max_body_bytes = 8192`
 
 ### Env override examples
 
@@ -415,7 +445,7 @@ Config path override:
 - `DISKGUARD_CONFIG_PATH=/config/config.toml` (legacy fallback)
 - `DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080`
 - `DISKGUARD_QBITTORRENT_USERNAME=admin`
-- `DISKGUARD_QBITTORRENT_PASSWORD=password`
+- `DISKGUARD_QBITTORRENT_PASSWORD=your-qb-password`
 - `DISKGUARD_QBITTORRENT_CONNECT_TIMEOUT_SECONDS=2.0`
 - `DISKGUARD_QBITTORRENT_READ_TIMEOUT_SECONDS=8.0`
 - `DISKGUARD_QBITTORRENT_TOTAL_TIMEOUT_SECONDS=12.0`
@@ -430,12 +460,15 @@ Config path override:
 - `DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS=1.0`
 - `DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS=10`
 - `DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY=32`
+- `DISKGUARD_ON_ADD_MAX_PENDING_TASKS=64`
 - `DISKGUARD_RESUME_POLICY=priority_fifo`
 - `DISKGUARD_RESUME_STRICT_FIFO=true`
 - `DISKGUARD_TAGGING_PAUSED_TAG=diskguard_paused`
 - `DISKGUARD_TAGGING_SOFT_ALLOWED_TAG=soft_allowed`
 - `DISKGUARD_LOGGING_LEVEL=DEBUG`
 - `DISKGUARD_SERVER_HOST=0.0.0.0`
+- `DISKGUARD_ON_ADD_AUTH_TOKEN=your-secret-token`
+- `DISKGUARD_SERVER_ON_ADD_MAX_BODY_BYTES=8192`
 
 > [!IMPORTANT]
 > Environment variables always override values in `config.toml`.
@@ -447,6 +480,10 @@ Config path override:
 - In Docker, keep `server.host = "0.0.0.0"` so other containers can reach DiskGuard. Only change this if your setup is unique.
 - `server.host` cannot be auto-derived from Docker service name; service names (`diskguard`) are DNS endpoints, not bind interfaces.
 - `server.port` is the listen port and must match what the qBittorrent hook calls.
+- `server.on_add_auth_token` is required and must be non-empty.
+- `/on-add` rejects requests missing `X-DiskGuard-Token` with HTTP `401`.
+- `server.on_add_max_body_bytes` bounds accepted payload size for `/on-add` (default `8192`).
+- Do not publish DiskGuard port externally (no `ports:` mapping on the DiskGuard service).
 
 ---
 
@@ -515,7 +552,18 @@ PYTHONPATH=src python -m diskguard
 ## Testing
 
 ```bash
+pip install -r requirements-dev.txt
 PYTHONPATH=src pytest
+```
+
+### Dependency lockfile
+
+- Runtime container installs from `requirements.lock` using `--require-hashes`.
+- Regenerate lockfile after dependency updates:
+
+```bash
+pip install -r requirements-dev.txt
+python -m piptools compile --generate-hashes --output-file requirements.lock requirements.in
 ```
 
 ## Troubleshooting
@@ -541,6 +589,17 @@ PYTHONPATH=src pytest
 
 - **Symptom**: startup retries followed by ERROR preflight failure, or WARNING logs during runtime ticks.
 - Verify `qbittorrent.url`, username, password in `/config/config.toml`.
+
+### Required secrets missing
+
+- **Symptom**: startup exits with `cannot be empty` for `qbittorrent.password` or `server.on_add_auth_token`.
+- Set both `qbittorrent.password` and `server.on_add_auth_token` to non-empty values in `/config/config.toml`.
+
+### `/on-add` unauthorized (`401`)
+
+- **Symptom**: qBittorrent hook runs, but DiskGuard returns HTTP `401`.
+- Verify `X-DiskGuard-Token` in the hook script matches `server.on_add_auth_token` exactly.
+- Ensure `server.on_add_auth_token` is set to a non-empty secret value.
 
 ### qBittorrent version incompatibility
 

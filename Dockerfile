@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:39e4e1ccb01578e3c86f7a0cf7b7fd89b8dbe2c27a88de11cf726ba669469f49
 
 LABEL org.opencontainers.image.title="DiskGuard" \
       org.opencontainers.image.description="DiskGuard - qBittorrent disk safety valve" \
@@ -17,9 +17,9 @@ WORKDIR /app
 RUN groupadd --gid "${DISKGUARD_GID}" diskguard \
     && useradd --uid "${DISKGUARD_UID}" --gid "${DISKGUARD_GID}" --home-dir /app --create-home --shell /usr/sbin/nologin diskguard
 
-COPY requirements.txt /app/requirements.txt
+COPY requirements.lock /app/requirements.lock
 
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r /app/requirements.lock
 
 COPY src /app/src
 

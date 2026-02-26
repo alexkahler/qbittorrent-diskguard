@@ -40,6 +40,9 @@ def make_config(
     on_add_quick_poll_interval_seconds: float = 1.0,
     on_add_quick_poll_max_attempts: int = 10,
     on_add_quick_poll_max_concurrency: int = 32,
+    on_add_max_pending_tasks: int = 64,
+    on_add_auth_token: str = "test-token",
+    on_add_max_body_bytes: int = 8192,
 ) -> AppConfig:
     """Creates a full AppConfig for tests."""
     return AppConfig(
@@ -61,11 +64,17 @@ def make_config(
             on_add_quick_poll_interval_seconds=on_add_quick_poll_interval_seconds,
             on_add_quick_poll_max_attempts=on_add_quick_poll_max_attempts,
             on_add_quick_poll_max_concurrency=on_add_quick_poll_max_concurrency,
+            on_add_max_pending_tasks=on_add_max_pending_tasks,
         ),
         resume=ResumeConfig(policy=policy, strict_fifo=strict_fifo),
         tagging=TaggingConfig(paused_tag=paused_tag, soft_allowed_tag=soft_allowed_tag),
         logging=LoggingConfig(level="DEBUG"),
-        server=ServerConfig(host="127.0.0.1", port=7070),
+        server=ServerConfig(
+            host="127.0.0.1",
+            port=7070,
+            on_add_auth_token=on_add_auth_token,
+            on_add_max_body_bytes=on_add_max_body_bytes,
+        ),
     )
 
 

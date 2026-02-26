@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import re
 import time
 
 from aiohttp import web
@@ -12,6 +14,9 @@ from diskguard.config import AppConfig
 from diskguard.errors import DiskProbeError, QbittorrentError
 from diskguard.models import Mode
 from diskguard.state import classify_mode, is_downloading_ish_state, is_forced_download_state
+
+ON_ADD_AUTH_HEADER = "X-DiskGuard-Token"
+TORRENT_HASH_PATTERN = re.compile(r"^(?:[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64})$")
 
 
 class WarningRateLimiter:
@@ -80,6 +85,11 @@ class OnAddHandler:
             self._config.polling.on_add_quick_poll_max_concurrency
         )
 
+    @property
+    def max_request_body_bytes(self) -> int:
+        """Returns the maximum accepted request body size for /on-add."""
+        return self._config.server.on_add_max_body_bytes
+
     async def handle(self, request: web.Request) -> web.Response:
         """Processes an on-add callback and schedules background work if needed.
 
@@ -89,11 +99,26 @@ class OnAddHandler:
         Returns:
             JSON response describing the action taken.
         """
+        if not self._is_authorized(request):
+            self._warn_rate_limited(
+                "on_add_auth_failure",
+                "on-add unauthorized request rejected",
+            )
+            return web.json_response(
+                {"status": "error", "message": "unauthorized"},
+                status=401,
+            )
+
         payload = await self._read_payload(request)
         torrent_hash = str(payload.get("hash", "")).strip()
         if not torrent_hash:
             return web.json_response(
                 {"status": "error", "message": "hash is required"},
+                status=400,
+            )
+        if not _is_valid_torrent_hash(torrent_hash):
+            return web.json_response(
+                {"status": "error", "message": "hash must be a 40 or 64 character hex string"},
                 status=400,
             )
         torrent_name = _coerce_log_value(payload.get("name"))
@@ -144,6 +169,16 @@ class OnAddHandler:
                 {"status": "accepted", "action": "quick_poll_already_scheduled", "mode": mode.value},
                 status=202,
             )
+        if self._pending_task_count() >= self._config.polling.on_add_max_pending_tasks:
+            self._warn_rate_limited(
+                "on_add_pending_limit",
+                "on-add pending task limit reached; rejecting torrent %s",
+                torrent_hash,
+            )
+            return web.json_response(
+                {"status": "error", "message": "on-add backlog limit reached"},
+                status=429,
+            )
 
         task = asyncio.create_task(self._quick_poll_then_pause_and_mark(torrent_hash, mode))
         self._background_tasks.add(task)
@@ -184,6 +219,8 @@ class OnAddHandler:
         if request.can_read_body:
             try:
                 posted = await request.post()
+            except web.HTTPRequestEntityTooLarge:
+                raise
             except Exception:  # noqa: BLE001
                 posted = {}
             for key, value in posted.items():
@@ -272,6 +309,18 @@ class OnAddHandler:
         if self._warning_rate_limiter.allow(key):
             self._logger.warning(message, *args)
 
+    def _pending_task_count(self) -> int:
+        """Returns the number of in-flight on-add background tasks."""
+        return sum(1 for task in self._background_tasks if not task.done())
+
+    def _is_authorized(self, request: web.Request) -> bool:
+        """Returns whether request token matches configured on-add shared secret."""
+        provided_token = request.headers.get(ON_ADD_AUTH_HEADER)
+        if not provided_token:
+            return False
+        expected_token = self._config.server.on_add_auth_token
+        return hmac.compare_digest(provided_token, expected_token)
+
 
 def create_http_app(on_add_handler: OnAddHandler) -> web.Application:
     """Builds the aiohttp app and routes.
@@ -282,7 +331,7 @@ def create_http_app(on_add_handler: OnAddHandler) -> web.Application:
     Returns:
         Configured aiohttp application.
     """
-    app = web.Application()
+    app = web.Application(client_max_size=on_add_handler.max_request_body_bytes)
     app.router.add_post("/on-add", on_add_handler.handle)
 
     async def _on_shutdown(_: web.Application) -> None:
@@ -301,3 +350,8 @@ def _coerce_log_value(value: object) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _is_valid_torrent_hash(torrent_hash: str) -> bool:
+    """Returns whether a torrent hash is valid 40-hex or 64-hex form."""
+    return bool(TORRENT_HASH_PATTERN.fullmatch(torrent_hash))

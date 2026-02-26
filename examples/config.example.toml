@@ -8,7 +8,7 @@ url = "http://qbittorrent:8080"
 # qBittorrent username used for API login. Default: none (required). Type: string.
 username = "admin"
 # qBittorrent password used for API login. Default: none (required). Type: string.
-password = "password"
+password = ""
 # HTTP connect timeout for qBittorrent requests in seconds. Default: 2.0. Type: float.
 connect_timeout_seconds = 2.0
 # HTTP read timeout for qBittorrent requests in seconds. Default: 8.0. Type: float.
@@ -39,6 +39,8 @@ on_add_quick_poll_interval_seconds = 1.0
 on_add_quick_poll_max_attempts = 10
 # Maximum concurrent on-add quick poll tasks. Default: 32. Type: int.
 on_add_quick_poll_max_concurrency = 32
+# Maximum queued/in-flight on-add quick poll tasks before returning HTTP 429. Default: 64. Type: int.
+on_add_max_pending_tasks = 64
 
 [resume]
 # Resume candidate ordering policy. Default: "priority_fifo". Type: string enum (smallest_first|priority_fifo|largest_first).
@@ -61,3 +63,7 @@ level = "INFO"
 host = "0.0.0.0"
 # HTTP listen port for DiskGuard API server. Default: 7070. Type: int.
 port = 7070
+# Required shared secret for POST /on-add header "X-DiskGuard-Token". Type: string.
+on_add_auth_token = ""
+# Maximum accepted request body size in bytes for /on-add. Default: 8192. Type: int.
+on_add_max_body_bytes = 8192

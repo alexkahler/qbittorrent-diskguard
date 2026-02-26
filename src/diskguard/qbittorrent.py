@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 from typing import Any, Mapping
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, urlunparse
 
 import aiohttp
 
@@ -18,6 +18,8 @@ from diskguard.errors import (
 )
 from diskguard.models import TorrentSnapshot
 from diskguard.state import parse_tags
+
+ERROR_BODY_MAX_LENGTH = 256
 
 
 class QbittorrentClient:
@@ -171,6 +173,7 @@ class QbittorrentClient:
 
             session = await self._ensure_session()
             login_url = self._build_endpoint("/api/v2/auth/login")
+            safe_login_url = _redact_url_credentials(login_url)
             try:
                 async with session.post(
                     login_url,
@@ -183,12 +186,12 @@ class QbittorrentClient:
                     body = await response.text()
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 raise QbittorrentUnavailableError(
-                    f"Unable to login to qBittorrent at {login_url}: {exc}"
+                    f"Unable to login to qBittorrent at {safe_login_url}: {exc}"
                 ) from exc
 
             if response.status != 200 or body.strip().lower() != "ok.":
                 raise QbittorrentAuthenticationError(
-                    f"qBittorrent authentication failed for POST {login_url}"
+                    f"qBittorrent authentication failed for POST {safe_login_url}"
                     f" (status {response.status})"
                     f"{self._format_detected_versions()}"
                 )
@@ -222,6 +225,7 @@ class QbittorrentClient:
             QbittorrentAuthenticationError: If auth still fails after relogin.
         """
         request_url = self._build_request_url(path, params=params)
+        safe_request_url = _redact_url_credentials(request_url)
         for attempt in range(2):
             await self._login(force=False)
             session = await self._ensure_session()
@@ -239,12 +243,13 @@ class QbittorrentClient:
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 self._logged_in = False
                 raise QbittorrentUnavailableError(
-                    f"qBittorrent request failed for {method} {request_url}: {exc}"
+                    f"qBittorrent request failed for {method} {safe_request_url}: {exc}"
                 ) from exc
 
             if response.status >= 400:
+                safe_body = _sanitize_error_body(body)
                 raise QbittorrentRequestError(
-                    f"qBittorrent {method} {request_url} failed with status {response.status}: {body}"
+                    f"qBittorrent {method} {safe_request_url} failed with status {response.status}: {safe_body}"
                     f"{self._format_detected_versions()}"
                 )
 
@@ -253,14 +258,14 @@ class QbittorrentClient:
                     return await response.json(content_type=None)
                 except Exception as exc:  # noqa: BLE001
                     raise QbittorrentRequestError(
-                        f"qBittorrent {method} {request_url} returned invalid JSON"
+                        f"qBittorrent {method} {safe_request_url} returned invalid JSON"
                         f"{self._format_detected_versions()}"
                     ) from exc
 
             return body
 
         raise QbittorrentAuthenticationError(
-            f"qBittorrent {method} {request_url} failed after relogin{self._format_detected_versions()}"
+            f"qBittorrent {method} {safe_request_url} failed after relogin{self._format_detected_versions()}"
         )
 
     def _build_endpoint(self, path: str) -> str:
@@ -386,4 +391,38 @@ def _parse_torrent_item(item: Any) -> TorrentSnapshot | None:
         tags=parse_tags(_coerce_optional_string(item.get("tags"))),
         name=_coerce_optional_string(item.get("name")),
         category=_coerce_optional_string(item.get("category")),
+    )
+
+
+def _sanitize_error_body(body: str, max_length: int = ERROR_BODY_MAX_LENGTH) -> str:
+    """Normalizes and truncates response body text for safe exception context."""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", " ", body)
+    normalized = " ".join(cleaned.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 3]}..."
+
+
+def _redact_url_credentials(url: str) -> str:
+    """Returns a URL safe for logs/errors by redacting embedded credentials."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    netloc = host
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    if parsed.username is not None or parsed.password is not None:
+        netloc = f"<redacted>@{netloc}"
+
+    return urlunparse(
+        (
+            parsed.scheme,
+            netloc,
+            parsed.path,
+            parsed.params,
+            parsed.query,
+            parsed.fragment,
+        )
     )
