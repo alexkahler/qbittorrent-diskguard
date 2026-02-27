@@ -56,12 +56,12 @@ Additional guarantees:
 
 ### Option A — Docker Compose (Recommended)
 
-1. Add the `diskguard` service to your `docker-compose.yml` (see example below).
+1. Add the `diskguard` service to your `docker-compose.yml` ([see example](#docker-compose-standard-setup)).
 2. Mount:
    * Your qBittorrent downloads folder → `/downloads`
    * A config folder → `/config`
-3. Create and edit the `config.toml` inside your mounted config directory (see example below).
-4. Add the qBittorrent on-add hook script:
+3. Create and edit the `config.toml` inside your mounted config directory ([see example](#example-configtoml)).
+4. Add the qBittorrent on-add hook script ([see example](#qbittorrent-on-add-hook)):
 
    ```
    /config/scripts/diskguard_on_add.sh "%I"
@@ -77,7 +77,7 @@ Additional guarantees:
 
 If you are not using Compose:
 
-1. Build the image (if not pulling from GHCR)
+1. Build the image (if not pulling from GHCR):
     ```bash
     docker build -t diskguard:latest .
     ```
@@ -88,7 +88,7 @@ If you are not using Compose:
     docker pull ghcr.io/alexkahler/qbittorrent-diskguard:latest
     ```
 
-2. Run **DiskGuard**
+2. Run **DiskGuard** ([see example](#docker-cli)):
 
     ```bash
     docker run -d \
@@ -101,9 +101,9 @@ If you are not using Compose:
       ghcr.io/alexkahler/qbittorrent-diskguard:latest
     ```
 
-3. Edit the created `config.toml`
+3. Edit the created `config.toml` ([see example](#example-configtoml)).
 
-4. Add the qBittorrent on-add hook
+4. Add the qBittorrent on-add hook ([see example](#qbittorrent-on-add-hook)):
 
     Create:
 
@@ -409,9 +409,6 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 > [!IMPORTANT]
 > Bootstrapped config initializes `qbittorrent.password` and `server.on_add_auth_token`
 > as empty values. DiskGuard exits until both are set to non-empty secrets.
-
-Config path override:
-- `DISKGUARD_CONFIG` can override the file path, but it must still be inside `/config`.
 
 ### Required keys
 
