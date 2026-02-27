@@ -8,7 +8,7 @@
 When free space drops below defined levels:
 
 * It pauses new torrents immediately (`POST /on-add`).
-* It enforces SOFT and HARD protection modes via a polling loop.
+* It enforces `SOFT` and `HARD` protection modes via a polling loop.
 * It pauses additional torrents as required to prevent disk exhaustion.
 
 When free space is restored:
@@ -24,7 +24,7 @@ Additional guarantees:
 
 ### What DiskGuard Does Not Do
 
-DiskGuard is intentionally minimal. It does **not**:
+**DiskGuard** is intentionally minimal. It does **not**:
 
 * Delete torrents or files.
 * Modify categories.
@@ -43,7 +43,7 @@ DiskGuard is intentionally minimal. It does **not**:
 
 ### Requirements
 
-- Docker and docker-compose (or equivalent).
+- Docker and docker-compose or Python >3.12.
 - qBittorrent Web API reachable from DiskGuard container.
 - qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
 - DiskGuard container must mount the same filesystem qBittorrent writes downloads to. 
@@ -52,7 +52,7 @@ DiskGuard is intentionally minimal. It does **not**:
 
 ## 🚀 Quick Start (Docker)
 
-DiskGuard is designed to run as a Docker sidecar alongside qBittorrent.
+**DiskGuard** is designed to run as a Docker sidecar alongside qBittorrent.
 
 ### Option A — Docker Compose (Recommended)
 
@@ -127,7 +127,7 @@ If you are not using Compose:
 
 ---
 
-## Example docker-compose.yml - Standard
+## Docker Compose (Standard Setup)
 
 ```yaml
 services:
@@ -156,8 +156,8 @@ services:
       - qbittorrent
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
-      - DISKGUARD_SERVER_PORT=${DISKGUARD_SERVER_PORT:-7070}
-      - DISKGUARD_ON_ADD_AUTH_TOKEN=${DISKGUARD_ON_ADD_AUTH_TOKEN:-}
+      - DISKGUARD_SERVER_PORT=${DISKGUARD_SERVER_PORT:-7070} # Or use the config.toml
+      - DISKGUARD_ON_ADD_AUTH_TOKEN=${DISKGUARD_ON_ADD_AUTH_TOKEN:-} # Or use the config.toml
       #- DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080              # Required if not using a persistent volume
       #- DISKGUARD_QBITTORRENT_USERNAME=${QBITTORRENT_USERNAME:-admin}  # Required if not using a persistent volume
       #- DISKGUARD_QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD:-} # Required if not using a persistent volume
@@ -171,14 +171,9 @@ networks:
     driver: bridge
 ```
 
-> [!SECURITY]
-> Do not publish the DiskGuard API port externally. Keep it internal to the Docker network.
-> Optional hardening for the `diskguard` service: `read_only: true`,
-> `cap_drop: ["ALL"]`, and `security_opt: ["no-new-privileges:true"]`.
-
 ---
 
-## Example docker-compose.yml - Gluetun
+## Docker Compose (Gluetun Setup)
 
 ```yaml
 
@@ -246,7 +241,7 @@ services:
 
 ---
 
-## Example Docker CLI
+## Docker CLI
 
 ```bash
 
@@ -263,7 +258,17 @@ docker run -d \
 
 ```
 
-`/config` mapping guidance:
+> [!CAUTION]
+> Do not publish the DiskGuard API port externally. Keep it internal to the Docker network.
+> Optional hardening for the `diskguard` service: `read_only: true`,
+> `cap_drop: ["ALL"]`, and `security_opt: ["no-new-privileges:true"]`.
+
+### Why set `user` on `diskguard`
+- Bind mounts keep host file ownership/permissions.
+- If `/path/to/downloads` is not world-readable, DiskGuard may fail to read disk stats when container UID/GID do not match host ownership.
+- `user: "${PUID}:${PGID}"` makes DiskGuard process run with host-equivalent IDs for reliable read access.
+
+### `/config` mapping guidance
 - Recommended: bind mount a folder (`/path/to/diskguard:/config`) so first-run bootstrap writes `/path/to/diskguard/config.toml`.
 - Also supported: named volume (example: `diskguard_config:/config`) for persistence across restarts.
 
@@ -272,11 +277,6 @@ docker run -d \
 > but configuration will be lost when the container is removed.
 > 
 > It is recommended to always mount `/config` to persist settings.
-
-Why set `user` on `diskguard`:
-- Bind mounts keep host file ownership/permissions.
-- If `/path/to/downloads` is not world-readable, DiskGuard may fail to read disk stats when container UID/GID do not match host ownership.
-- `user: "${PUID}:${PGID}"` makes DiskGuard process run with host-equivalent IDs for reliable read access.
 
 ---
 
@@ -324,12 +324,6 @@ on_add_max_body_bytes = 8192
 > [!TIP]
 > Find a fully commented `config.toml` file in the [examples folder](/examples/config.example.toml).
 
-If you want a different webhook port, set one variable in ``environment`` section of your docker compose:
-
-```dotenv
-DISKGUARD_SERVER_PORT=7171
-```
-
 ---
 
 ## qBittorrent on-add hook
@@ -344,7 +338,7 @@ openssl rand -hex 32
 ```
 
 Set the same token value in both:
-- DiskGuard `server.on_add_auth_token` (or `DISKGUARD_ON_ADD_AUTH_TOKEN`)
+- DiskGuard config `server.on_add_auth_token` (or `DISKGUARD_ON_ADD_AUTH_TOKEN`)
 - qBittorrent hook script variable `DISKGUARD_ON_ADD_AUTH_TOKEN`
 
 Create `/path/to/qbittorrent/config/scripts/diskguard_on_add.sh` (or another path which qBittorrent has access to):
@@ -373,12 +367,13 @@ exit 0
 
 > [!IMPORTANT]
 > Hook URL requirements:
-> - Host must be Docker service name `diskguard` (same Docker network as qBittorrent) or `localhost` if *DiskGuard* is in `network_mode: service:<some_service>`.
+> - Host must be Docker service name `diskguard` (same Docker network as qBittorrent) or `localhost` if DiskGuard is in `network_mode: service:<some_service>`.
 > - Port must match DiskGuard effective listen port:
 >   - `server.port` in `config.toml`, or
 >   - `DISKGUARD_SERVER_PORT` env override in DiskGuard container.
 > - Path must be `/on-add`.
 > - Header `X-DiskGuard-Token` must match DiskGuard `server.on_add_auth_token`.
+> - The first argument must be a "%I" postfix to the script.
 
 > [!CAUTION]
 > If the host or port is incorrect, torrents will not be paused on add.
@@ -396,6 +391,13 @@ Finally, in **qBittorrent**, go to:
 3. Scroll down to `Run external program` section
 4. Enable checkbox on `Run on torrent added:`
 5. Fill in the path to the script with: `/config/scripts/diskguard_on_add.sh "%I"`
+
+> [!TIP]
+> If you want a different webhook port, set one variable in ``environment`` section of your docker compose:
+>
+> ```dotenv
+> DISKGUARD_SERVER_PORT=7171
+> ```
 
 ---
 
@@ -441,8 +443,6 @@ Config path override:
 
 ### Env override examples
 
-- `DISKGUARD_CONFIG=/config/config.toml`
-- `DISKGUARD_CONFIG_PATH=/config/config.toml` (legacy fallback)
 - `DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080`
 - `DISKGUARD_QBITTORRENT_USERNAME=admin`
 - `DISKGUARD_QBITTORRENT_PASSWORD=your-qb-password`
@@ -619,3 +619,8 @@ python -m piptools compile --generate-hashes --output-file requirements.lock req
 - Check tag names in `[tagging]` config.
 - Verify qBittorrent account has permission to pause/resume and edit tags.
 - Ensure hook script path in qBittorrent is correct and executable.
+
+> [!NOTE]
+> ## AI Disclaimer
+>
+>This project used AI/LLM tools (e.g., ChatGPT, Claude, etc.) to assist with grammar, spelling, tone, clarity, and editorial review of documentation (e.g., README.md). AI was also used to help brainstorm and draft example code snippets and identify potential issues. All AI-assisted output was critically reviewed, edited as needed, and verified by a human maintainer who understands the content and code committed to this repository. No AI output was included verbatim without human approval.

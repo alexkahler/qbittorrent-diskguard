@@ -1,5 +1,5 @@
 # DiskGuard loads config from /config/config.toml inside the container.
-# Recommended Docker mapping: ./diskguard:/config
+# Recommended Docker mapping: /path/to/diskguard:/config
 # On first run, DiskGuard auto-creates /config/config.toml if it is missing.
 
 [qbittorrent]
@@ -17,29 +17,29 @@ read_timeout_seconds = 8.0
 total_timeout_seconds = 12.0
 
 [disk]
-# Path inside DiskGuard container to the downloads filesystem to monitor. Default: "/downloads". Type: string.
+# Advanced: Path inside DiskGuard container to the downloads filesystem to monitor. Default: "/downloads". Type: string.
 watch_path = "/downloads"
 # Enter SOFT mode when free disk percent drops below this threshold. Default: 10.0. Type: float.
 soft_pause_below_pct = 10.0
 # Enter HARD mode when free disk percent drops below this threshold. Default: 5.0. Type: float.
 hard_pause_below_pct = 5.0
-# Minimum free disk percent target for resume planning floor. Default: 10.0. Type: float.
+# Minimum free disk percent target for resume planning floor. Inrease this if you want torrents to resume when more space has been regained. Default: 10.0. Type: float.
 resume_floor_pct = 10.0
-# Extra reserve added to resume planning floor in gibibytes. Default: 10.0. Type: float.
+# Extra reserve added to resume planning floor in gibibytes. Increase this if you often experience restarts hovering around the SOFT limit. Default: 10.0. Type: float.
 safety_buffer_gb = 10.0
 # Torrent states treated as downloading-ish for enforcement/projection. Default: ["downloading", "metaDL", "queuedDL", "stalledDL", "checkingDL", "allocating"]. Type: list[string].
 downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkingDL", "allocating"]
 
 [polling]
-# Seconds between enforcement ticks. Default: 30. Type: int.
+# Seconds between enforcement ticks. Incraese this to lessen the burden on qBittorrent, at the risk of slower response time. Default: 30. Type: int.
 interval_seconds = 30
-# Seconds between on-add quick poll attempts in SOFT/HARD. Default: 1.0. Type: float.
+# Seconds between on-add quick poll attempts in SOFT/HARD. Change this to a higher number if you often experience timeouts. Default: 1.0. Type: float.
 on_add_quick_poll_interval_seconds = 1.0
-# Maximum on-add quick poll attempts per torrent hash in SOFT/HARD. Default: 10. Type: int.
+# Maximum on-add quick poll attempts per torrent hash in SOFT/HARD. Increase this if your qBittorrent is slow in getting metadata. Default: 10. Type: int.
 on_add_quick_poll_max_attempts = 10
-# Maximum concurrent on-add quick poll tasks. Default: 32. Type: int.
+# Advanced: Maximum concurrent on-add quick poll tasks. Default: 32. Type: int.
 on_add_quick_poll_max_concurrency = 32
-# Maximum queued/in-flight on-add quick poll tasks before returning HTTP 429. Default: 64. Type: int.
+# Advanced: Maximum queued/in-flight on-add quick poll tasks before returning HTTP 429. Default: 64. Type: int.
 on_add_max_pending_tasks = 64
 
 [resume]
@@ -59,11 +59,11 @@ soft_allowed_tag = "soft_allowed"
 level = "INFO"
 
 [server]
-# HTTP bind address for DiskGuard API server. Default: "0.0.0.0". Type: string.
+# Advanced: HTTP bind address for DiskGuard API server. Default: "0.0.0.0". Type: string.
 host = "0.0.0.0"
 # HTTP listen port for DiskGuard API server. Default: 7070. Type: int.
 port = 7070
 # Required shared secret for POST /on-add header "X-DiskGuard-Token". Type: string.
 on_add_auth_token = ""
-# Maximum accepted request body size in bytes for /on-add. Default: 8192. Type: int.
+# Advanced: Maximum accepted request body size in bytes for /on-add. Default: 8192. Type: int.
 on_add_max_body_bytes = 8192
