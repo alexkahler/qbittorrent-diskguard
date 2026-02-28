@@ -3,8 +3,9 @@
 import asyncio
 import logging
 
+import qbittorrentapi
+
 from diskguard.engine import ModeEngine
-from diskguard.errors import QbittorrentUnavailableError
 from diskguard.resume_planner import ResumePlanner
 from tests.helpers import FakeDiskProbe, FakeQbClient, disk_stats, make_config, missing_path_error, torrent
 
@@ -380,7 +381,7 @@ async def test_missing_watch_path_is_safe_noop_for_tick() -> None:
 async def test_qbittorrent_unreachable_skips_tick_without_actions() -> None:
     """Tests that qbittorrent unreachable skips tick without actions."""
     config = make_config()
-    qb = FakeQbClient(fetch_error=QbittorrentUnavailableError("offline"))
+    qb = FakeQbClient(fetch_error=qbittorrentapi.APIConnectionError("offline"))
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])
     planner = ResumePlanner(config, qb)
     engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
@@ -504,19 +505,75 @@ async def test_pause_and_mark_continues_when_add_tag_fails() -> None:
     assert qb.add_tag_calls == [("x", "diskguard_paused")]
 
 
-async def test_add_and_remove_tag_helpers_return_false_on_failure() -> None:
-    """Tests that add and remove tag helpers return false on failure."""
+class BatchPauseFailsQbClient(FakeQbClient):
+    """Fake client that fails pause calls only for batch hash payloads."""
+
+    def torrents_pause(self, *, torrent_hashes=None) -> None:  # type: ignore[override]
+        """Fails batch pause to force fallback path in engine."""
+        if torrent_hashes is not None and not isinstance(torrent_hashes, str):
+            raise qbittorrentapi.APIConnectionError("batch pause failed")
+        super().torrents_pause(torrent_hashes=torrent_hashes)
+
+
+class BatchRemoveTagsFailsQbClient(FakeQbClient):
+    """Fake client that fails remove_tag calls only for batch hash payloads."""
+
+    def torrents_remove_tags(  # type: ignore[override]
+        self,
+        *,
+        tags=None,
+        torrent_hashes=None,
+    ) -> None:
+        """Fails batch remove-tags to force per-torrent fallback path."""
+        if torrent_hashes is not None and not isinstance(torrent_hashes, str):
+            raise qbittorrentapi.APIConnectionError("batch remove tags failed")
+        super().torrents_remove_tags(tags=tags, torrent_hashes=torrent_hashes)
+
+
+async def test_tick_raises_non_api_fetch_errors() -> None:
+    """Tests that non-API errors from torrents_info are not swallowed."""
     config = make_config()
-    qb = FakeQbClient(
-        fail_add_tag={("x", "soft_allowed")},
-        fail_remove_tag={("x", "soft_allowed")},
-    )
+    qb = FakeQbClient(fetch_error=RuntimeError("invalid payload shape"))
     probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
     planner = ResumePlanner(config, qb)
     engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
 
-    add_result = await engine._add_tag("x", "soft_allowed")
-    remove_result = await engine._remove_tag("x", "soft_allowed", reason="test")
+    try:
+        await engine.tick()
+    except RuntimeError as exc:
+        assert str(exc) == "invalid payload shape"
+    else:  # pragma: no cover
+        raise AssertionError("Expected RuntimeError to propagate from engine.tick()")
 
-    assert add_result is False
-    assert remove_result is False
+
+async def test_pause_and_mark_many_falls_back_to_per_torrent_when_batch_pause_fails() -> None:
+    """Tests that _pause_and_mark_many falls back to per-torrent operations."""
+    config = make_config()
+    qb = BatchPauseFailsQbClient()
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    await engine._pause_and_mark_many(["a", "b"])
+
+    assert qb.pause_calls == ["a", "b"]
+    assert qb.add_tag_calls == [("a", "diskguard_paused"), ("b", "diskguard_paused")]
+
+
+async def test_remove_tag_from_hashes_returns_only_successful_hashes_when_partial_fallback_fails() -> None:
+    """Tests that _remove_tag_from_hashes reports only successful removals."""
+    config = make_config()
+    qb = BatchRemoveTagsFailsQbClient(fail_remove_tag={("bad", "diskguard_paused")})
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=500)])
+    planner = ResumePlanner(config, qb)
+    engine = ModeEngine(config, qb_client=qb, disk_probe=probe, resume_planner=planner)
+
+    removed = await engine._remove_tag_from_hashes(
+        tag="diskguard_paused",
+        torrent_hashes=["ok", "bad"],
+        reason="test",
+    )
+
+    assert removed == {"ok"}
+
+

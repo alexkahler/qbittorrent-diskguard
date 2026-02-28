@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import FrozenSet
 
 
 class Mode(str, Enum):
@@ -28,24 +27,6 @@ class DiskStats:
     total_bytes: int
     free_bytes: int
     free_pct: float
-
-
-@dataclass(frozen=True)
-class TorrentSnapshot:
-    """Partial torrent model with only fields needed by DiskGuard."""
-
-    hash: str
-    state: str
-    amount_left: int | None
-    priority: int
-    added_on: int
-    tags: FrozenSet[str]
-    name: str | None = None
-    category: str | None = None
-
-    def has_tag(self, tag: str) -> bool:
-        """Returns whether this torrent has a specific tag."""
-        return tag in self.tags
 
 
 @dataclass(frozen=True)

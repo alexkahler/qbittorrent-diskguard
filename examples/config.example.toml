@@ -13,8 +13,6 @@ password = ""
 connect_timeout_seconds = 2.0
 # HTTP read timeout for qBittorrent requests in seconds. Default: 8.0. Type: float.
 read_timeout_seconds = 8.0
-# Total HTTP timeout for qBittorrent requests in seconds. Default: 12.0. Type: float.
-total_timeout_seconds = 12.0
 
 [disk]
 # Advanced: Path inside DiskGuard container to the downloads filesystem to monitor. Default: "/downloads". Type: string.

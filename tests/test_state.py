@@ -7,17 +7,9 @@ from diskguard.state import (
     is_downloading_ish_state,
     is_forced_download_state,
     is_paused_download_state,
-    parse_tags,
     sort_resume_candidates,
 )
 from tests.helpers import torrent
-
-
-def test_parse_tags_trims_and_ignores_empty_values() -> None:
-    """Tests that parse tags trims and ignores empty values."""
-    assert parse_tags("foo, bar, ,baz,,") == frozenset({"foo", "bar", "baz"})
-    assert parse_tags("") == frozenset()
-    assert parse_tags(None) == frozenset()
 
 
 def test_mode_classification_boundaries() -> None:
@@ -46,17 +38,17 @@ def test_active_downloader_projection_filter() -> None:
     downloading_states = ("downloading", "metaDL")
     assert is_active_downloader_for_projection(
         torrent("a", state="downloading", amount_left=10),
-        paused_tag="diskguard_paused",
+        paused_hashes=set(),
         downloading_states=downloading_states,
     )
     assert not is_active_downloader_for_projection(
-        torrent("b", state="downloading", amount_left=10, tags=("diskguard_paused",)),
-        paused_tag="diskguard_paused",
+        torrent("b", state="downloading", amount_left=10),
+        paused_hashes={"b"},
         downloading_states=downloading_states,
     )
     assert not is_active_downloader_for_projection(
         torrent("c", state="forcedDL", amount_left=10),
-        paused_tag="diskguard_paused",
+        paused_hashes=set(),
         downloading_states=downloading_states,
     )
 

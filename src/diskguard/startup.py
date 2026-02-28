@@ -4,39 +4,33 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Awaitable, Callable
-from typing import Protocol
 from urllib.parse import urlparse, urlunparse
 
-from diskguard.errors import (
-    QbittorrentAuthenticationError,
-    QbittorrentError,
-    QbittorrentRequestError,
-    QbittorrentUnavailableError,
-    StartupPreflightError,
-)
+from packaging.version import InvalidVersion, Version
+import qbittorrentapi
+
+from diskguard.errors import StartupPreflightError
 
 DEFAULT_PREFLIGHT_ATTEMPTS = 10
 DEFAULT_PREFLIGHT_MAX_BACKOFF_SECONDS = 5.0
 DEFAULT_PREFLIGHT_ATTEMPT_TIMEOUT_SECONDS = 2.0
-MIN_SUPPORTED_QBITTORRENT_VERSION = (5, 1, 0)
-MIN_SUPPORTED_WEBAPI_VERSION = (2, 3, 0)
+MIN_SUPPORTED_QBITTORRENT_VERSION = Version("4.2.0")
+MIN_SUPPORTED_WEBAPI_VERSION = Version("2.3.0")
 _VALID_QBITTORRENT_URL_SCHEMES = frozenset({"http", "https"})
-_SEMVER_PREFIX_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 
-class QbittorrentVersionProbeClient(Protocol):
-    """Required qBittorrent client behavior for startup preflight checks."""
-
-    async def fetch_application_version(self) -> str:
-        """Returns qBittorrent application version from the authenticated API."""
-        ...
-
-    async def fetch_webapi_version(self) -> str:
-        """Returns qBittorrent Web API version from the authenticated API."""
-        ...
-
+def _parse_version_string(version: str) -> Version | None:
+    """Parses a version string into a comparable ``packaging.version.Version``."""
+    normalized = version.strip()
+    if not normalized:
+        return None
+    if normalized.lower().startswith("v"):
+        normalized = normalized[1:]
+    try:
+        return Version(normalized)
+    except InvalidVersion:
+        return None
 
 def validate_qbittorrent_url(url: str) -> None:
     """Validates qBittorrent base URL format for startup preflight.
@@ -60,9 +54,8 @@ def validate_qbittorrent_url(url: str) -> None:
     except ValueError as exc:
         raise StartupPreflightError("Invalid qbittorrent.url: port must be numeric") from exc
 
-
 async def run_qbittorrent_startup_preflight(
-    qb_client: QbittorrentVersionProbeClient,
+    qb_client: qbittorrentapi.Client,
     *,
     qb_url: str,
     logger: logging.Logger,
@@ -99,9 +92,11 @@ async def run_qbittorrent_startup_preflight(
         raise
     qb_url_for_logs = _redact_url_credentials(qb_url)
 
-    last_error: QbittorrentError | None = None
+    last_error: Exception | None = None
+    last_failure_kind = "connection/request error"
     for attempt in range(1, max_attempts + 1):
-        attempt_error: QbittorrentError | None = None
+        attempt_error: Exception | None = None
+        failure_kind = "connection/request error"
         try:
             qbittorrent_version, webapi_version = await asyncio.wait_for(
                 _fetch_detected_versions(qb_client),
@@ -112,10 +107,30 @@ async def run_qbittorrent_startup_preflight(
                 webapi_version=webapi_version,
             )
         except TimeoutError:
-            attempt_error = QbittorrentUnavailableError(
+            attempt_error = TimeoutError(
                 f"startup preflight request timed out after {attempt_timeout_seconds:.1f}s"
             )
-        except QbittorrentRequestError as exc:
+        except qbittorrentapi.UnsupportedQbittorrentVersion as exc:
+            unsupported_error = StartupPreflightError(
+                "Connected qBittorrent is not fully supported by this qbittorrent-api "
+                f"release: {exc}. {_format_minimum_version_requirement()}"
+            )
+            logger.error("qBittorrent startup preflight failed: %s", unsupported_error)
+            raise unsupported_error from exc
+        except (qbittorrentapi.LoginFailed, qbittorrentapi.HTTP401Error, qbittorrentapi.HTTP403Error) as exc:
+            attempt_error = exc
+            failure_kind = "authentication error"
+        except qbittorrentapi.HTTPError as exc:
+            version_probe_error = StartupPreflightError(
+                "Unable to determine qBittorrent compatibility from required version "
+                "endpoints (/api/v2/app/version, /api/v2/app/webapiVersion). "
+                f"{_format_minimum_version_requirement()} Underlying error: {exc}"
+            )
+            logger.error("qBittorrent startup preflight failed: %s", version_probe_error)
+            raise version_probe_error from exc
+        except qbittorrentapi.APIConnectionError as exc:
+            attempt_error = exc
+        except qbittorrentapi.APIError as exc:
             version_probe_error = StartupPreflightError(
                 "Unable to determine qBittorrent compatibility from required version "
                 "endpoints (/api/v2/app/version, /api/v2/app/webapiVersion). "
@@ -126,12 +141,10 @@ async def run_qbittorrent_startup_preflight(
         except StartupPreflightError as exc:
             logger.error("qBittorrent startup preflight failed: %s", exc)
             raise
-        except QbittorrentError as exc:
-            attempt_error = exc
 
         if attempt_error is not None:
             last_error = attempt_error
-            failure_kind = _classify_failure(attempt_error)
+            last_failure_kind = failure_kind
             if attempt == max_attempts:
                 break
 
@@ -159,31 +172,31 @@ async def run_qbittorrent_startup_preflight(
         raise StartupPreflightError(
             f"qBittorrent startup preflight failed after {max_attempts} attempts without a captured error"
         )
-    failure_kind = _classify_failure(last_error)
     logger.error(
         "qBittorrent startup preflight failed after %d attempts (%s) for %s: %s",
         max_attempts,
-        failure_kind,
+        last_failure_kind,
         qb_url_for_logs,
         last_error,
     )
     raise StartupPreflightError(
         f"qBittorrent startup preflight failed after {max_attempts} attempts "
-        f"({failure_kind}): {last_error}"
+        f"({last_failure_kind}): {last_error}"
     ) from last_error
 
 
-async def _fetch_detected_versions(qb_client: QbittorrentVersionProbeClient) -> tuple[str, str]:
+async def _fetch_detected_versions(qb_client: qbittorrentapi.Client) -> tuple[str, str]:
     """Fetches qBittorrent and Web API versions via authenticated endpoints."""
-    qbittorrent_version = await qb_client.fetch_application_version()
-    webapi_version = await qb_client.fetch_webapi_version()
+    # qbittorrentapi.Client.app_version signature validated via introspection.
+    qbittorrent_version = str(await asyncio.to_thread(qb_client.app_version)).strip()
+    # qbittorrentapi.Client.app_web_api_version signature validated via introspection.
+    webapi_version = str(await asyncio.to_thread(qb_client.app_web_api_version)).strip()
     return qbittorrent_version, webapi_version
-
 
 def _validate_minimum_supported_versions(*, qbittorrent_version: str, webapi_version: str) -> None:
     """Validates version strings against DiskGuard's minimum supported baseline."""
-    parsed_qbittorrent = _parse_semver_prefix(qbittorrent_version)
-    parsed_webapi = _parse_semver_prefix(webapi_version)
+    parsed_qbittorrent = _parse_version_string(qbittorrent_version)
+    parsed_webapi = _parse_version_string(webapi_version)
 
     if parsed_qbittorrent is None or parsed_webapi is None:
         raise StartupPreflightError(
@@ -202,34 +215,18 @@ def _validate_minimum_supported_versions(*, qbittorrent_version: str, webapi_ver
             f"{_format_minimum_version_requirement()}"
         )
 
-
-def _parse_semver_prefix(version: str) -> tuple[int, int, int] | None:
-    """Parses a semantic version prefix (major.minor.patch) from a string."""
-    match = _SEMVER_PREFIX_PATTERN.match(version)
-    if match is None:
-        return None
-    major, minor, patch = match.groups()
-    return (int(major), int(minor), int(patch))
-
-
 def _format_minimum_version_requirement() -> str:
     """Formats the minimum supported qBittorrent/Web API requirement."""
     return (
         "DiskGuard requires qBittorrent >= "
-        f"{_format_semver(MIN_SUPPORTED_QBITTORRENT_VERSION)} and Web API >= "
-        f"{_format_semver(MIN_SUPPORTED_WEBAPI_VERSION)}."
+        f"v{MIN_SUPPORTED_QBITTORRENT_VERSION} and Web API >= "
+        f"{MIN_SUPPORTED_WEBAPI_VERSION}."
     )
-
-
-def _format_semver(version: tuple[int, int, int]) -> str:
-    """Formats a semantic version tuple as major.minor.patch."""
-    return ".".join(str(component) for component in version)
 
 
 def _compute_retry_backoff_seconds(*, attempt: int, max_backoff_seconds: float) -> float:
     """Computes bounded linear retry backoff for startup preflight warnings."""
     return min(float(attempt), max_backoff_seconds)
-
 
 def _redact_url_credentials(url: str) -> str:
     """Returns a URL safe for logs by redacting any embedded user credentials."""
@@ -254,10 +251,3 @@ def _redact_url_credentials(url: str) -> str:
             parsed.fragment,
         )
     )
-
-
-def _classify_failure(exc: QbittorrentError) -> str:
-    """Maps qBittorrent exceptions to a high-level preflight failure kind."""
-    if isinstance(exc, QbittorrentAuthenticationError):
-        return "authentication error"
-    return "connection/request error"

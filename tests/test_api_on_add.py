@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+import threading
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from diskguard.api import OnAddHandler, create_http_app
+from diskguard.models import Mode
 from tests.helpers import FakeDiskProbe, FakeQbClient, disk_stats, make_config, torrent
 
 AUTH_TOKEN = "test-token"
@@ -24,17 +26,30 @@ class BlockingQbClient(FakeQbClient):
 
     def __init__(self) -> None:
         super().__init__()
-        self._release_event = asyncio.Event()
+        self._release_event = threading.Event()
 
-    async def fetch_torrent_by_hash(self, torrent_hash: str):  # type: ignore[override]
+    def torrents_info(self, *, torrent_hashes: str | None = None):  # type: ignore[override]
         """Blocks until release and then returns a known-size snapshot."""
+        if torrent_hashes is None:
+            return super().torrents_info()
+        torrent_hash = str(torrent_hashes)
         self.fetch_torrent_calls.append(torrent_hash)
-        await self._release_event.wait()
-        return torrent(torrent_hash, state="downloading", amount_left=10)
+        self._release_event.wait()
+        return [torrent(torrent_hash, state="downloading", amount_left=10)]
 
     def release(self) -> None:
         """Releases blocked quick-poll calls."""
         self._release_event.set()
+
+
+class NonApiFailureQbClient(FakeQbClient):
+    """Fake client that raises non-API error during quick poll."""
+
+    def torrents_info(self, *, torrent_hashes: str | None = None):  # type: ignore[override]
+        """Raises runtime error for quick poll calls."""
+        if torrent_hashes is not None:
+            raise RuntimeError("bad quick poll payload")
+        return super().torrents_info()
 
 
 async def test_on_add_rejects_missing_auth_token() -> None:
@@ -472,3 +487,18 @@ async def test_on_add_respects_configured_max_request_body_size() -> None:
             )
 
     assert response.status == 413
+
+
+async def test_on_add_quick_poll_raises_non_api_errors() -> None:
+    """Tests that non-API quick-poll errors are not swallowed."""
+    config = make_config(on_add_quick_poll_interval_seconds=0.01, on_add_quick_poll_max_attempts=1)
+    qb = NonApiFailureQbClient()
+    probe = FakeDiskProbe(stats_sequence=[disk_stats(total_bytes=1_000, free_bytes=90)])
+    handler = OnAddHandler(config, qb_client=qb, disk_probe=probe)
+
+    try:
+        await handler._quick_poll_then_pause_and_mark(VALID_HASH_40, Mode.SOFT)
+    except RuntimeError as exc:
+        assert str(exc) == "bad quick poll payload"
+    else:  # pragma: no cover
+        raise AssertionError("Expected RuntimeError to propagate from quick poll")

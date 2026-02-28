@@ -9,11 +9,16 @@ import re
 import time
 
 from aiohttp import web
+import qbittorrentapi
 
 from diskguard.config import AppConfig
-from diskguard.errors import DiskProbeError, QbittorrentError
+from diskguard.errors import DiskProbeError
 from diskguard.models import Mode
-from diskguard.state import classify_mode, is_downloading_ish_state, is_forced_download_state
+from diskguard.state import (
+    classify_mode,
+    is_downloading_ish_state,
+    is_forced_download_state,
+)
 
 ON_ADD_AUTH_HEADER = "X-DiskGuard-Token"
 TORRENT_HASH_PATTERN = re.compile(r"^(?:[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64})$")
@@ -180,6 +185,7 @@ class OnAddHandler:
                 status=429,
             )
 
+        #TODO: Consider whether we can consolidate hashes in the quick poll update to avoid spamming API calls when multiple on-add callbacks are received. qbittorrentapi torrents_info support multiple hashes passed as parameter. This would involve tracking in-flight tasks by torrent hash and skipping scheduling new tasks when an existing one is still pending for the same hash.
         task = asyncio.create_task(self._quick_poll_then_pause_and_mark(torrent_hash, mode))
         self._background_tasks.add(task)
         self._on_add_tasks_by_hash[torrent_hash] = task
@@ -239,15 +245,19 @@ class OnAddHandler:
         """
         paused_tag = self._config.tagging.paused_tag
         try:
-            await self._qb_client.pause_torrent(torrent_hash)
-            await self._qb_client.add_tag(torrent_hash, paused_tag)
+            await asyncio.to_thread(self._qb_client.torrents_pause, torrent_hashes=torrent_hash)
+            await asyncio.to_thread(
+                self._qb_client.torrents_add_tags,
+                tags=paused_tag,
+                torrent_hashes=torrent_hash,
+            )
             self._logger.debug(
                 "on-add paused torrent %s and added tag %s in %s mode",
                 torrent_hash,
                 paused_tag,
                 mode.value,
             )
-        except QbittorrentError as exc:
+        except qbittorrentapi.APIError as exc:
             self._warn_rate_limited(
                 "on_add_qb_failure",
                 "on-add failed to pause/tag torrent %s: %s",
@@ -264,8 +274,12 @@ class OnAddHandler:
         async with self._quick_poll_semaphore:
             for attempt in range(1, max_attempts + 1):
                 try:
-                    snapshot = await self._qb_client.fetch_torrent_by_hash(torrent_hash)
-                except QbittorrentError as exc:
+                    payload = await asyncio.to_thread(
+                        self._qb_client.torrents_info,
+                        torrent_hashes=torrent_hash,
+                    )
+                    torrent_dict = payload[0] if payload else None
+                except qbittorrentapi.APIError as exc:
                     self._warn_rate_limited(
                         "on_add_qb_failure",
                         "on-add quick poll failed for torrent %s: %s",
@@ -274,10 +288,11 @@ class OnAddHandler:
                     )
                     return
 
-                if snapshot is not None:
-                    amount_left = snapshot.amount_left
+                if torrent_dict is not None:
+                    amount_left = torrent_dict.amount_left
+                    state_value = str(torrent_dict.state)
                     if amount_left is not None and amount_left > 0:
-                        if is_forced_download_state(snapshot.state):
+                        if is_forced_download_state(state_value):
                             self._logger.debug(
                                 "on-add quick poll skipping forcedDL torrent %s in %s mode",
                                 torrent_hash,
@@ -285,7 +300,7 @@ class OnAddHandler:
                             )
                             return
 
-                        if is_downloading_ish_state(snapshot.state, downloading_states):
+                        if is_downloading_ish_state(state_value, downloading_states):
                             await self._pause_and_mark(torrent_hash, mode)
                             return
 

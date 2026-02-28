@@ -85,7 +85,6 @@ class QbittorrentConfig:
     password: str
     connect_timeout_seconds: float = 2.0
     read_timeout_seconds: float = 8.0
-    total_timeout_seconds: float = 12.0
 
 
 @dataclass(frozen=True)
@@ -247,11 +246,6 @@ ENV_OVERRIDES: dict[str, tuple[str, str, EnvParser]] = {
     "DISKGUARD_QBITTORRENT_READ_TIMEOUT_SECONDS": (
         "qbittorrent",
         "read_timeout_seconds",
-        _parse_float,
-    ),
-    "DISKGUARD_QBITTORRENT_TOTAL_TIMEOUT_SECONDS": (
-        "qbittorrent",
-        "total_timeout_seconds",
         _parse_float,
     ),
     "DISKGUARD_DISK_WATCH_PATH": ("disk", "watch_path", str),
@@ -474,10 +468,6 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
         read_timeout_seconds=_as_float(
             qb_section.get("read_timeout_seconds", 8.0),
             "qbittorrent.read_timeout_seconds",
-        ),
-        total_timeout_seconds=_as_float(
-            qb_section.get("total_timeout_seconds", 12.0),
-            "qbittorrent.total_timeout_seconds",
         ),
     )
 
@@ -734,8 +724,6 @@ def _validate(config: AppConfig) -> None:
         raise ConfigError("qbittorrent.connect_timeout_seconds must be greater than zero")
     if config.qbittorrent.read_timeout_seconds <= 0:
         raise ConfigError("qbittorrent.read_timeout_seconds must be greater than zero")
-    if config.qbittorrent.total_timeout_seconds <= 0:
-        raise ConfigError("qbittorrent.total_timeout_seconds must be greater than zero")
     if config.server.port <= 0 or config.server.port > 65535:
         raise ConfigError("server.port must be between 1 and 65535")
     if config.server.on_add_max_body_bytes <= 0:

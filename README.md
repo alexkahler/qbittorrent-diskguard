@@ -45,7 +45,7 @@ Additional guarantees:
 
 - Docker and docker-compose or Python >3.12.
 - qBittorrent Web API reachable from DiskGuard container.
-- qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
+- qBittorrent `>= v4.2.0` and Web API `>= 2.3.0`.
 - DiskGuard container must mount the same filesystem qBittorrent writes downloads to. 
 
 ---
@@ -445,7 +445,6 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `DISKGUARD_QBITTORRENT_PASSWORD=your-qb-password`
 - `DISKGUARD_QBITTORRENT_CONNECT_TIMEOUT_SECONDS=2.0`
 - `DISKGUARD_QBITTORRENT_READ_TIMEOUT_SECONDS=8.0`
-- `DISKGUARD_QBITTORRENT_TOTAL_TIMEOUT_SECONDS=12.0`
 - `DISKGUARD_DISK_WATCH_PATH=/downloads`
 - `DISKGUARD_DISK_SOFT_PAUSE_BELOW_PCT=10`
 - `DISKGUARD_DISK_HARD_PAUSE_BELOW_PCT=5`
@@ -602,7 +601,7 @@ python -m piptools compile --generate-hashes --output-file requirements.lock req
 ### qBittorrent version incompatibility
 
 - **Symptom**: startup fails immediately with an incompatible version ERROR message.
-- Required minimum: qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
+- Required minimum: qBittorrent `>= v4.2.0` and Web API `>= 2.3.0`.
 - Upgrade qBittorrent, then restart DiskGuard.
 
 ### Network failure between containers

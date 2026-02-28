@@ -17,7 +17,7 @@ async def test_negative_or_zero_budget_means_no_resumes() -> None:
     ]
     stats = disk_stats(total_bytes=1000, free_bytes=100)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"candidate"})
     assert summary.budget <= 0
     assert summary.resumed_hashes == ()
     assert qb.resume_calls == []
@@ -35,7 +35,7 @@ async def test_missing_active_amount_left_skips_resumes_for_safety() -> None:
     ]
     stats = disk_stats(total_bytes=1000, free_bytes=500)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"candidate"})
     assert summary.active_remaining is None
     assert qb.resume_calls == []
 
@@ -52,7 +52,7 @@ async def test_priority_fifo_strict_stops_at_first_non_fitting_candidate() -> No
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"first", "second"})
     assert summary.resumed_hashes == ()
     assert qb.resume_calls == []
     assert summary.decisions[0].hash == "first"
@@ -71,7 +71,7 @@ async def test_priority_fifo_skip_mode_continues_after_non_fit() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"first", "second"})
     assert summary.resumed_hashes == ("second",)
     assert qb.resume_calls == ["second"]
 
@@ -89,7 +89,7 @@ async def test_smallest_first_resumes_best_fit_order() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=25)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"a", "b", "c"})
     assert summary.resumed_hashes == ("b", "a")
     assert qb.resume_calls == ["b", "a"]
 
@@ -107,7 +107,7 @@ async def test_largest_first_chooses_largest_that_fits_first() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=35)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"small", "large", "medium"})
     assert summary.resumed_hashes == ("large",)
     assert qb.resume_calls == ["large"]
 
@@ -125,7 +125,7 @@ async def test_zero_or_invalid_amount_left_candidates_are_skipped() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=10)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"zero", "none", "good"})
     assert summary.resumed_hashes == ("good",)
     assert qb.resume_calls == ["good"]
 
@@ -142,7 +142,7 @@ async def test_candidate_not_in_paused_download_state_is_not_resumed() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"not-paused-download", "good"})
     assert summary.resumed_hashes == ("good",)
     assert qb.resume_calls == ["good"]
 
@@ -156,7 +156,7 @@ async def test_resume_failure_keeps_torrent_unresumed() -> None:
     torrents = [torrent("bad", state="pausedDL", amount_left=5, tags=("diskguard_paused",))]
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"bad"})
     assert summary.resumed_hashes == ()
     assert summary.decisions[0].reason == "resume_failed"
     assert qb.resume_calls == ["bad"]
@@ -171,6 +171,6 @@ async def test_remove_tag_failure_after_resume_still_counts_as_resumed() -> None
     torrents = [torrent("ok", state="pausedDL", amount_left=5, tags=("diskguard_paused",))]
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
-    summary = await planner.execute(torrents, stats)
+    summary = await planner.execute(torrents, stats, paused_hashes={"ok"})
     assert summary.resumed_hashes == ("ok",)
     assert qb.resume_calls == ["ok"]
