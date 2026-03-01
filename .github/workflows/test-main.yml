@@ -61,3 +61,41 @@ jobs:
 
       - name: Run pip-audit
         run: python -m pip_audit -r requirements.lock
+
+  quality:
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements-dev.txt
+
+      - name: Run Ruff (non-blocking)
+        id: ruff
+        continue-on-error: true
+        run: python -m ruff check .
+
+      - name: Ruff warning summary
+        if: always() && steps.ruff.outcome == 'failure'
+        run: echo "::warning title=Ruff check failed::Ruff reported issues. See step logs for details."
+
+      - name: Run mypy (non-blocking)
+        id: mypy
+        continue-on-error: true
+        run: python -m mypy .
+
+      - name: mypy warning summary
+        if: always() && steps.mypy.outcome == 'failure'
+        run: echo "::warning title=mypy check failed::mypy reported typing issues. See step logs for details."
