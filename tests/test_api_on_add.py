@@ -1,12 +1,13 @@
 """Tests for the /on-add fast path endpoint."""
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 import logging
 import threading
 
 import pytest
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.test_utils import BaseTestServer, TestClient, TestServer
 
 from diskguard.api import OnAddHandler, create_http_app
 from tests.helpers import FakeDiskProbe, FakeQbClient, disk_stats, make_config, torrent
@@ -19,6 +20,14 @@ VALID_HASH_64 = "b" * 64
 def _auth_headers(token: str = AUTH_TOKEN) -> dict[str, str]:
     """Returns auth headers for on-add endpoint requests."""
     return {"X-DiskGuard-Token": token}
+
+
+@asynccontextmanager
+async def _test_client(server: BaseTestServer) -> AsyncIterator[TestClient]:
+    """Builds a typed aiohttp test client context for strict mypy checks."""
+    client: TestClient = TestClient(server)
+    async with client:
+        yield client
 
 
 class BlockingQbClient(FakeQbClient):
@@ -127,7 +136,7 @@ async def test_on_add_rejects_missing_auth_token() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post("/on-add", data={"hash": VALID_HASH_40})
             payload = await response.json()
 
@@ -147,7 +156,7 @@ async def test_on_add_rejects_invalid_auth_token() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -171,7 +180,7 @@ async def test_on_add_in_normal_mode_does_nothing() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -196,7 +205,7 @@ async def test_on_add_accepts_valid_64_character_hash() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_64},
@@ -225,7 +234,7 @@ async def test_on_add_in_soft_mode_pauses_and_tags_hash() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -249,7 +258,7 @@ async def test_on_add_requires_hash() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post("/on-add", data={}, headers=_auth_headers())
             payload = await response.json()
 
@@ -279,7 +288,7 @@ async def test_on_add_rejects_invalid_hash_format(invalid_hash: str) -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": invalid_hash},
@@ -310,7 +319,7 @@ async def test_on_add_returns_accepted_when_qb_is_temporarily_unavailable() -> N
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -341,7 +350,7 @@ async def test_on_add_handles_parallel_calls_without_state_corruption() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             responses = await asyncio.gather(
                 *(
                     client.post(
@@ -377,7 +386,7 @@ async def test_on_add_batches_quick_poll_fetches_for_parallel_hashes() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             responses = await asyncio.gather(
                 *(
                     client.post(
@@ -418,7 +427,7 @@ async def test_on_add_parallel_hashes_drop_removed_second_hash_only() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             responses = await asyncio.gather(
                 *(
                     client.post(
@@ -466,7 +475,7 @@ async def test_on_add_deduplicates_quick_poll_for_same_hash() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             first, second = await asyncio.gather(
                 client.post(
                     "/on-add", data={"hash": VALID_HASH_40}, headers=_auth_headers()
@@ -494,7 +503,7 @@ async def test_on_add_deduplicates_hash_while_pause_and_tag_are_in_flight() -> N
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             first_response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -532,7 +541,7 @@ async def test_on_add_worker_non_api_quick_poll_failure_does_not_stick_hash() ->
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             first_response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -570,7 +579,7 @@ async def test_on_add_returns_429_when_quick_poll_queue_limit_reached() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             first_response = await client.post(
                 "/on-add",
                 data={"hash": first_hash},
@@ -606,7 +615,7 @@ async def test_on_add_logs_info_with_hash_on_hook_call(
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -641,7 +650,7 @@ async def test_on_add_logs_optional_name_and_category_when_present(
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40, "name": "Ubuntu ISO", "category": "linux"},
@@ -679,7 +688,7 @@ async def test_on_add_quick_poll_waits_until_known_size_before_pause() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -710,7 +719,7 @@ async def test_on_add_quick_poll_pauses_known_size_even_if_not_downloading() -> 
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -740,7 +749,7 @@ async def test_on_add_quick_poll_skips_forced_download_with_known_size() -> None
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -768,7 +777,7 @@ async def test_on_add_quick_poll_drops_hash_when_missing_from_payload() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -801,7 +810,7 @@ async def test_on_add_quick_poll_does_not_pause_when_size_stays_unknown() -> Non
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40},
@@ -826,7 +835,7 @@ async def test_on_add_respects_configured_max_request_body_size() -> None:
 
     app = create_http_app(handler)
     async with TestServer(app) as server:
-        async with TestClient(server) as client:
+        async with _test_client(server) as client:
             response = await client.post(
                 "/on-add",
                 data={"hash": VALID_HASH_40, "name": "x" * 512},

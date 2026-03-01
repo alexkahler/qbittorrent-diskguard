@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
 
 import qbittorrentapi
 
@@ -101,15 +102,18 @@ def torrent(
     priority: int = 0,
     added_on: int = 0,
     tags: tuple[str, ...] = (),
-) -> FakeTorrent:
+) -> qbittorrentapi.TorrentDictionary:
     """Factory for FakeTorrent."""
-    return FakeTorrent(
-        hash=torrent_hash,
-        state=state,
-        amount_left=amount_left,
-        priority=priority,
-        added_on=added_on,
-        tags=", ".join(tags),
+    return cast(
+        qbittorrentapi.TorrentDictionary,
+        FakeTorrent(
+            hash=torrent_hash,
+            state=state,
+            amount_left=amount_left,
+            priority=priority,
+            added_on=added_on,
+            tags=", ".join(tags),
+        ),
     )
 
 
@@ -140,8 +144,11 @@ class FakeQbClient:
     def __init__(
         self,
         *,
-        torrents_sequence: list[list[FakeTorrent]] | None = None,
-        torrent_lookup_sequence: dict[str, list[FakeTorrent | None]] | None = None,
+        torrents_sequence: list[list[qbittorrentapi.TorrentDictionary]] | None = None,
+        torrent_lookup_sequence: dict[
+            str, list[qbittorrentapi.TorrentDictionary | None]
+        ]
+        | None = None,
         fetch_error: Exception | None = None,
         fail_fetch_torrent: set[str] | None = None,
         fail_pause: set[str] | None = None,
@@ -155,7 +162,7 @@ class FakeQbClient:
         self._torrent_lookup_calls_by_hash: dict[str, int] = {}
         self._fetch_error = fetch_error
         self._fetch_calls = 0
-        self._current_snapshot: list[FakeTorrent] | None = None
+        self._current_snapshot: list[qbittorrentapi.TorrentDictionary] | None = None
 
         self.fail_fetch_torrent = fail_fetch_torrent or set()
         self.fail_pause = fail_pause or set()
@@ -170,9 +177,13 @@ class FakeQbClient:
         self.resume_calls: list[str] = []
         self.resume_request_payloads: list[tuple[str, ...]] = []
         self.add_tag_calls: list[tuple[str, str]] = []
-        self.add_tag_request_payloads: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        self.add_tag_request_payloads: list[
+            tuple[tuple[str, ...], tuple[str, ...]]
+        ] = []
         self.remove_tag_calls: list[tuple[str, str]] = []
-        self.remove_tag_request_payloads: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+        self.remove_tag_request_payloads: list[
+            tuple[tuple[str, ...], tuple[str, ...]]
+        ] = []
 
     @property
     def fetch_calls(self) -> int:
@@ -184,7 +195,7 @@ class FakeQbClient:
         *,
         torrent_hashes: str | Iterable[str] | None = None,
         tag: str | None = None,
-    ) -> list[FakeTorrent]:
+    ) -> list[qbittorrentapi.TorrentDictionary]:
         """Returns torrents, optionally filtered by hash or tag."""
         if torrent_hashes is not None:
             requested_hashes = _normalize_hash_filter(torrent_hashes)
@@ -196,7 +207,7 @@ class FakeQbClient:
                         f"fetch torrent failed for {torrent_hash}"
                     )
 
-            resolved_by_hash: dict[str, FakeTorrent] = {}
+            resolved_by_hash: dict[str, qbittorrentapi.TorrentDictionary] = {}
             used_lookup_sequences = False
             for torrent_hash in requested_hashes:
                 lookup_sequence = self._torrent_lookup_sequence.get(torrent_hash)
@@ -213,11 +224,17 @@ class FakeQbClient:
 
             if used_lookup_sequences:
                 if not self._torrents_sequence:
-                    return [resolved_by_hash[torrent_hash] for torrent_hash in requested_hashes if torrent_hash in resolved_by_hash]
+                    return [
+                        resolved_by_hash[torrent_hash]
+                        for torrent_hash in requested_hashes
+                        if torrent_hash in resolved_by_hash
+                    ]
 
                 index = min(self._fetch_calls, len(self._torrents_sequence) - 1)
-                by_hash = {torrent.hash: torrent for torrent in self._torrents_sequence[index]}
-                results: list[FakeTorrent] = []
+                by_hash = {
+                    torrent.hash: torrent for torrent in self._torrents_sequence[index]
+                }
+                results: list[qbittorrentapi.TorrentDictionary] = []
                 for torrent_hash in requested_hashes:
                     if torrent_hash in resolved_by_hash:
                         results.append(resolved_by_hash[torrent_hash])
@@ -229,8 +246,14 @@ class FakeQbClient:
             if not self._torrents_sequence:
                 return []
             index = min(self._fetch_calls, len(self._torrents_sequence) - 1)
-            by_hash = {torrent.hash: torrent for torrent in self._torrents_sequence[index]}
-            return [by_hash[torrent_hash] for torrent_hash in requested_hashes if torrent_hash in by_hash]
+            by_hash = {
+                torrent.hash: torrent for torrent in self._torrents_sequence[index]
+            }
+            return [
+                by_hash[torrent_hash]
+                for torrent_hash in requested_hashes
+                if torrent_hash in by_hash
+            ]
 
         if tag is None:
             self._fetch_calls += 1
@@ -245,25 +268,35 @@ class FakeQbClient:
             base_snapshot = self._torrents_sequence[index]
         else:
             base_snapshot = self._current_snapshot
-        return [torrent for torrent in base_snapshot if _torrent_has_tag(torrent, str(tag))]
+        return [
+            torrent for torrent in base_snapshot if _torrent_has_tag(torrent, str(tag))
+        ]
 
-    def torrents_pause(self, *, torrent_hashes: str | Iterable[str] | None = None) -> None:
+    def torrents_pause(
+        self, *, torrent_hashes: str | Iterable[str] | None = None
+    ) -> None:
         """Stops a torrent."""
         normalized_hashes = _normalize_hash_filter(torrent_hashes)
         self.pause_request_payloads.append(tuple(normalized_hashes))
         for torrent_hash in normalized_hashes:
             self.pause_calls.append(torrent_hash)
             if torrent_hash in self.fail_pause:
-                raise qbittorrentapi.APIConnectionError(f"pause failed for {torrent_hash}")
+                raise qbittorrentapi.APIConnectionError(
+                    f"pause failed for {torrent_hash}"
+                )
 
-    def torrents_resume(self, *, torrent_hashes: str | Iterable[str] | None = None) -> None:
+    def torrents_resume(
+        self, *, torrent_hashes: str | Iterable[str] | None = None
+    ) -> None:
         """Resumes a torrent."""
         normalized_hashes = _normalize_hash_filter(torrent_hashes)
         self.resume_request_payloads.append(tuple(normalized_hashes))
         for torrent_hash in normalized_hashes:
             self.resume_calls.append(torrent_hash)
             if torrent_hash in self.fail_resume:
-                raise qbittorrentapi.APIConnectionError(f"resume failed for {torrent_hash}")
+                raise qbittorrentapi.APIConnectionError(
+                    f"resume failed for {torrent_hash}"
+                )
 
     def torrents_add_tags(
         self,
@@ -274,12 +307,16 @@ class FakeQbClient:
         """Adds tags to a torrent."""
         normalized_tags = _normalize_tags(tags)
         normalized_hashes = _normalize_hash_filter(torrent_hashes)
-        self.add_tag_request_payloads.append((tuple(normalized_hashes), tuple(normalized_tags)))
+        self.add_tag_request_payloads.append(
+            (tuple(normalized_hashes), tuple(normalized_tags))
+        )
         for torrent_hash in normalized_hashes:
             for tag in normalized_tags:
                 self.add_tag_calls.append((torrent_hash, tag))
                 if (torrent_hash, tag) in self.fail_add_tag:
-                    raise qbittorrentapi.APIConnectionError(f"add tag failed for {torrent_hash}")
+                    raise qbittorrentapi.APIConnectionError(
+                        f"add tag failed for {torrent_hash}"
+                    )
 
     def torrents_remove_tags(
         self,
@@ -290,12 +327,16 @@ class FakeQbClient:
         """Removes tags from a torrent."""
         normalized_tags = _normalize_tags(tags)
         normalized_hashes = _normalize_hash_filter(torrent_hashes)
-        self.remove_tag_request_payloads.append((tuple(normalized_hashes), tuple(normalized_tags)))
+        self.remove_tag_request_payloads.append(
+            (tuple(normalized_hashes), tuple(normalized_tags))
+        )
         for torrent_hash in normalized_hashes:
             for tag in normalized_tags:
                 self.remove_tag_calls.append((torrent_hash, tag))
                 if (torrent_hash, tag) in self.fail_remove_tag:
-                    raise qbittorrentapi.APIConnectionError(f"remove tag failed for {torrent_hash}")
+                    raise qbittorrentapi.APIConnectionError(
+                        f"remove tag failed for {torrent_hash}"
+                    )
 
     def app_version(self) -> str:
         """Returns fake application version."""
@@ -321,7 +362,7 @@ def missing_path_error(path: str = "/downloads") -> DiskProbeError:
     return DiskProbeError(f"Unable to read watch path {path!r}")
 
 
-def _torrent_has_tag(torrent: FakeTorrent, tag: str) -> bool:
+def _torrent_has_tag(torrent: qbittorrentapi.TorrentDictionary, tag: str) -> bool:
     """Returns whether a fake torrent has a specific tag."""
     tags = {part.strip() for part in torrent.tags.split(",") if part.strip()}
     return tag in tags

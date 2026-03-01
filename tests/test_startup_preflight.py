@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from typing import cast
 
 from packaging.version import Version
 import qbittorrentapi
@@ -50,7 +51,8 @@ class FakeVersionProbeClient:
         """Initializes the test helper state."""
         self._app_version_outcomes = list(app_version_outcomes)
         self._webapi_version_outcomes = list(
-            webapi_version_outcomes or [str(startup_module.MIN_SUPPORTED_WEBAPI_VERSION)]
+            webapi_version_outcomes
+            or [str(startup_module.MIN_SUPPORTED_WEBAPI_VERSION)]
         )
         self.calls = 0
         self.webapi_calls = 0
@@ -66,13 +68,17 @@ class FakeVersionProbeClient:
     def app_web_api_version(self) -> str:
         """Fetch webapi version."""
         self.webapi_calls += 1
-        outcome = self._resolve_outcome(self._webapi_version_outcomes, self.webapi_calls)
+        outcome = self._resolve_outcome(
+            self._webapi_version_outcomes, self.webapi_calls
+        )
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
     @staticmethod
-    def _resolve_outcome(outcomes: list[Exception | str], call_count: int) -> Exception | str:
+    def _resolve_outcome(
+        outcomes: list[Exception | str], call_count: int
+    ) -> Exception | str:
         """Resolve outcome."""
         index = min(call_count - 1, len(outcomes) - 1)
         return outcomes[index]
@@ -90,6 +96,11 @@ class SleepRecorder:
         self.calls.append(seconds)
 
 
+def _as_qb_client(client: FakeVersionProbeClient) -> qbittorrentapi.Client:
+    """Casts a fake probe client to the qBittorrent client type for mypy."""
+    return cast(qbittorrentapi.Client, client)
+
+
 def test_validate_qbittorrent_url_rejects_invalid_scheme() -> None:
     """Tests that validate qbittorrent url rejects invalid scheme."""
     with pytest.raises(StartupPreflightError):
@@ -102,7 +113,9 @@ def test_validate_qbittorrent_url_rejects_missing_hostname() -> None:
         validate_qbittorrent_url("http://:8080")
 
 
-async def test_startup_preflight_retries_then_succeeds(caplog: pytest.LogCaptureFixture) -> None:
+async def test_startup_preflight_retries_then_succeeds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Tests that startup preflight retries then succeeds."""
     caplog.set_level(logging.INFO)
     minimum_qb = str(startup_module.MIN_SUPPORTED_QBITTORRENT_VERSION)
@@ -117,7 +130,7 @@ async def test_startup_preflight_retries_then_succeeds(caplog: pytest.LogCapture
     logger = logging.getLogger("diskguard.startup.test")
 
     await run_qbittorrent_startup_preflight(
-        client,
+        _as_qb_client(client),
         qb_url="http://qbittorrent:8080",
         logger=logger,
         sleep_func=sleep_recorder,
@@ -126,7 +139,8 @@ async def test_startup_preflight_retries_then_succeeds(caplog: pytest.LogCapture
     assert client.calls == 3
     assert sleep_recorder.calls == [1.0, 2.0]
     assert any(
-        record.levelno == logging.INFO and "Connected to qBittorrent at http://qbittorrent:8080" in record.getMessage()
+        record.levelno == logging.INFO
+        and "Connected to qBittorrent at http://qbittorrent:8080" in record.getMessage()
         for record in caplog.records
     )
     assert sum(record.levelno == logging.WARNING for record in caplog.records) == 2
@@ -142,7 +156,7 @@ async def test_startup_preflight_success_log_redacts_url_credentials(
     logger = logging.getLogger("diskguard.startup.test")
 
     await run_qbittorrent_startup_preflight(
-        client,
+        _as_qb_client(client),
         qb_url="http://user:pass@qbittorrent:8080",
         logger=logger,
     )
@@ -170,7 +184,7 @@ async def test_startup_preflight_compatible_minimum_versions_passes(
     logger = logging.getLogger("diskguard.startup.test")
 
     await run_qbittorrent_startup_preflight(
-        client,
+        _as_qb_client(client),
         qb_url="http://qbittorrent:8080",
         logger=logger,
         max_attempts=3,
@@ -195,7 +209,7 @@ async def test_startup_preflight_incompatible_versions_fail_with_clear_error(
 
     with pytest.raises(StartupPreflightError) as exc_info:
         await run_qbittorrent_startup_preflight(
-            client,
+            _as_qb_client(client),
             qb_url="http://qbittorrent:8080",
             logger=logger,
             max_attempts=5,
@@ -225,7 +239,7 @@ async def test_startup_preflight_rejects_pre_add_tags_version_floor(
 
     with pytest.raises(StartupPreflightError) as exc_info:
         await run_qbittorrent_startup_preflight(
-            client,
+            _as_qb_client(client),
             qb_url="http://qbittorrent:8080",
             logger=logger,
             max_attempts=2,
@@ -259,7 +273,7 @@ async def test_startup_preflight_missing_webapi_version_endpoint_fails_with_acti
 
     with pytest.raises(StartupPreflightError) as exc_info:
         await run_qbittorrent_startup_preflight(
-            client,
+            _as_qb_client(client),
             qb_url="http://qbittorrent:8080",
             logger=logger,
             max_attempts=5,
@@ -274,7 +288,9 @@ async def test_startup_preflight_missing_webapi_version_endpoint_fails_with_acti
     assert any(record.levelno == logging.ERROR for record in caplog.records)
 
 
-async def test_startup_preflight_retries_then_fails(caplog: pytest.LogCaptureFixture) -> None:
+async def test_startup_preflight_retries_then_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Tests that startup preflight retries then fails."""
     caplog.set_level(logging.WARNING)
     client = FakeVersionProbeClient([qbittorrentapi.APIConnectionError("offline")])
@@ -283,7 +299,7 @@ async def test_startup_preflight_retries_then_fails(caplog: pytest.LogCaptureFix
 
     with pytest.raises(StartupPreflightError) as exc_info:
         await run_qbittorrent_startup_preflight(
-            client,
+            _as_qb_client(client),
             qb_url="http://qbittorrent:8080",
             logger=logger,
             sleep_func=sleep_recorder,
@@ -306,7 +322,7 @@ async def test_startup_preflight_retry_and_error_logs_redact_url_credentials(
 
     with pytest.raises(StartupPreflightError):
         await run_qbittorrent_startup_preflight(
-            client,
+            _as_qb_client(client),
             qb_url="http://user:pass@qbittorrent:8080",
             logger=logger,
             max_attempts=2,
@@ -329,7 +345,7 @@ async def test_startup_preflight_auth_failure_surfaces_explicit_auth_error(
 
     with pytest.raises(StartupPreflightError) as exc_info:
         await run_qbittorrent_startup_preflight(
-            client,
+            _as_qb_client(client),
             qb_url="http://qbittorrent:8080",
             logger=logger,
             max_attempts=2,
@@ -338,6 +354,7 @@ async def test_startup_preflight_auth_failure_surfaces_explicit_auth_error(
 
     assert "authentication error" in str(exc_info.value).lower()
     assert any(
-        record.levelno == logging.WARNING and "authentication error" in record.getMessage().lower()
+        record.levelno == logging.WARNING
+        and "authentication error" in record.getMessage().lower()
         for record in caplog.records
     )

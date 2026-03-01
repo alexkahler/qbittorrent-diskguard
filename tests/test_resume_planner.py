@@ -1,10 +1,19 @@
 """Tests for resume projection and policy behavior."""
 
+from typing import cast
+
 import qbittorrentapi
 
 from diskguard.models import ResumePolicy
 from diskguard.resume_planner import ResumePlanner
 from tests.helpers import FakeQbClient, disk_stats, make_config, torrent
+
+
+def _as_info_list(
+    torrents: list[qbittorrentapi.TorrentDictionary],
+) -> qbittorrentapi.TorrentInfoList:
+    """Casts a plain torrent list to qbittorrent-api's TorrentInfoList type."""
+    return cast(qbittorrentapi.TorrentInfoList, torrents)
 
 
 async def test_negative_or_zero_budget_means_no_resumes() -> None:
@@ -21,7 +30,9 @@ async def test_negative_or_zero_budget_means_no_resumes() -> None:
     ]
     stats = disk_stats(total_bytes=1000, free_bytes=100)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"candidate"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"candidate"}
+    )
     assert summary.budget <= 0
     assert summary.resumed_hashes == ()
     assert qb.resume_calls == []
@@ -44,7 +55,9 @@ async def test_resume_floor_blocks_resumes_when_free_below_floor() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=11)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"candidate"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"candidate"}
+    )
 
     assert summary.budget < 0
     assert summary.resumed_hashes == ()
@@ -67,7 +80,9 @@ async def test_missing_active_amount_left_skips_resumes_for_safety() -> None:
     ]
     stats = disk_stats(total_bytes=1000, free_bytes=500)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"candidate"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"candidate"}
+    )
     assert summary.active_remaining is None
     assert len(summary.decisions) == 1
     assert summary.decisions[0].reason == "active_remaining_unknown"
@@ -105,7 +120,9 @@ async def test_priority_fifo_strict_stops_at_first_non_fitting_candidate() -> No
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"first", "second"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"first", "second"}
+    )
     assert summary.resumed_hashes == ()
     assert qb.resume_calls == []
     assert summary.decisions[0].hash == "first"
@@ -143,7 +160,9 @@ async def test_priority_fifo_skip_mode_continues_after_non_fit() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"first", "second"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"first", "second"}
+    )
     assert summary.resumed_hashes == ("second",)
     assert qb.resume_calls == ["second"]
 
@@ -179,7 +198,9 @@ async def test_batch_resume_failure_marks_all_planned_candidates_as_failed() -> 
     ]
     stats = disk_stats(total_bytes=100, free_bytes=70)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"first", "second"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"first", "second"}
+    )
 
     assert summary.resumed_hashes == ()
     assert summary.decisions[0].hash == "first"
@@ -231,7 +252,7 @@ async def test_priority_fifo_strict_stops_after_first_non_fit_even_if_later_woul
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
     summary = await planner.execute(
-        torrents, stats, paused_hashes={"fit", "non_fit", "later_fit"}
+        _as_info_list(torrents), stats, paused_hashes={"fit", "non_fit", "later_fit"}
     )
 
     assert summary.resumed_hashes == ("fit",)
@@ -269,7 +290,9 @@ async def test_smallest_first_resumes_best_fit_order() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=25)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"a", "b", "c"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"a", "b", "c"}
+    )
     assert summary.resumed_hashes == ("b", "a")
     assert qb.resume_calls == ["b", "a"]
 
@@ -290,7 +313,7 @@ async def test_largest_first_chooses_largest_that_fits_first() -> None:
     stats = disk_stats(total_bytes=100, free_bytes=35)
 
     summary = await planner.execute(
-        torrents, stats, paused_hashes={"small", "large", "medium"}
+        _as_info_list(torrents), stats, paused_hashes={"small", "large", "medium"}
     )
     assert summary.resumed_hashes == ("large",)
     assert qb.resume_calls == ["large"]
@@ -315,7 +338,7 @@ async def test_zero_or_invalid_amount_left_candidates_are_skipped() -> None:
     stats = disk_stats(total_bytes=100, free_bytes=10)
 
     summary = await planner.execute(
-        torrents, stats, paused_hashes={"zero", "none", "good"}
+        _as_info_list(torrents), stats, paused_hashes={"zero", "none", "good"}
     )
     assert summary.resumed_hashes == ("good",)
     assert qb.resume_calls == ["good"]
@@ -339,7 +362,7 @@ async def test_candidate_not_in_paused_download_state_is_not_resumed() -> None:
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
     summary = await planner.execute(
-        torrents, stats, paused_hashes={"not-paused-download", "good"}
+        _as_info_list(torrents), stats, paused_hashes={"not-paused-download", "good"}
     )
     assert summary.resumed_hashes == ("good",)
     assert qb.resume_calls == ["good"]
@@ -356,7 +379,9 @@ async def test_resume_failure_keeps_torrent_unresumed() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"bad"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"bad"}
+    )
     assert summary.resumed_hashes == ()
     assert summary.decisions[0].reason == "resume_failed"
     assert qb.resume_calls == ["bad"]
@@ -374,7 +399,9 @@ async def test_remove_tag_failure_after_resume_still_counts_as_resumed() -> None
     ]
     stats = disk_stats(total_bytes=100, free_bytes=20)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"ok"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"ok"}
+    )
     assert summary.resumed_hashes == ("ok",)
     assert qb.resume_calls == ["ok"]
 
@@ -396,7 +423,9 @@ async def test_resume_planner_batches_resume_and_paused_tag_removals() -> None:
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"a", "b"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"a", "b"}
+    )
 
     assert summary.resumed_hashes == ("a", "b")
     assert ("a", "b") in qb.resume_request_payloads
@@ -436,7 +465,9 @@ async def test_resume_planner_marks_batch_resume_failure_without_per_hash_retry(
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"a", "b"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"a", "b"}
+    )
 
     assert summary.resumed_hashes == ()
     assert [decision.reason for decision in summary.decisions] == [
@@ -467,7 +498,7 @@ async def test_execute_uses_paused_torrents_input_when_provided() -> None:
     stats = disk_stats(total_bytes=100, free_bytes=30)
 
     summary = await planner.execute(
-        torrents,
+        _as_info_list(torrents),
         stats,
         paused_hashes={"first", "second"},
         paused_torrents=[second],
@@ -520,7 +551,9 @@ async def test_resume_planner_keeps_resumed_when_batch_tag_remove_fails() -> Non
     ]
     stats = disk_stats(total_bytes=100, free_bytes=50)
 
-    summary = await planner.execute(torrents, stats, paused_hashes={"a", "b"})
+    summary = await planner.execute(
+        _as_info_list(torrents), stats, paused_hashes={"a", "b"}
+    )
 
     assert summary.resumed_hashes == ("a", "b")
     assert qb.remove_tag_request_payloads == [(("a", "b"), ("diskguard_paused",))]
