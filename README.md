@@ -43,7 +43,7 @@ Additional guarantees:
 
 ### Requirements
 
-- Docker and docker-compose or Python >3.12.
+- Docker and docker-compose or Python >=3.13.
 - qBittorrent Web API reachable from DiskGuard container.
 - qBittorrent `>= v4.2.0` and Web API `>= 2.3.0`.
 - DiskGuard container must mount the same filesystem qBittorrent writes downloads to. 
@@ -557,7 +557,7 @@ PYTHONPATH=src pytest
 ### Dependency lockfile
 
 - Runtime container installs from `requirements.lock` using `--require-hashes`.
-- Generate the lockfile with the same Python minor version as the runtime image/CI (`3.12`) to avoid hash-mode marker mismatches.
+- Generate the lockfile with the same Python minor version as the runtime image/CI (`3.13`) to avoid hash-mode marker mismatches.
 - Regenerate lockfile after dependency updates:
 
 ```bash

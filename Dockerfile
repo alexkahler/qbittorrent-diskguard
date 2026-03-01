@@ -1,4 +1,4 @@
-FROM python:3.12-slim@sha256:39e4e1ccb01578e3c86f7a0cf7b7fd89b8dbe2c27a88de11cf726ba669469f49
+FROM python:3.13-slim@sha256:f50f56f1471fc430b394ee75fc826be2d212e35d85ed1171ac79abbba485dce9
 
 LABEL org.opencontainers.image.title="DiskGuard" \
       org.opencontainers.image.description="DiskGuard - qBittorrent disk safety valve" \
