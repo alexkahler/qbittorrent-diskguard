@@ -17,7 +17,6 @@ def build_qbittorrent_client(config: QbittorrentConfig) -> qbittorrentapi.Client
         Configured qbittorrent-api client.
     """
     # TODO: Add centralized redaction for qbittorrent-api exception text before logging call-site errors.
-    # qbittorrentapi.Client signature validated via introspection.
     return qbittorrentapi.Client(
         host=config.url,
         username=config.username,

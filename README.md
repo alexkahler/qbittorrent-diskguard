@@ -300,8 +300,7 @@ downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkin
 interval_seconds = 30
 on_add_quick_poll_interval_seconds = 1.0
 on_add_quick_poll_max_attempts = 10
-on_add_quick_poll_max_concurrency = 32
-on_add_max_pending_tasks = 64
+on_add_quick_poll_max_queue_size = 64
 
 [resume]
 policy = "priority_fifo"
@@ -427,8 +426,7 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `polling.interval_seconds = 30`
 - `polling.on_add_quick_poll_interval_seconds = 1.0`
 - `polling.on_add_quick_poll_max_attempts = 10`
-- `polling.on_add_quick_poll_max_concurrency = 32`
-- `polling.on_add_max_pending_tasks = 64`
+- `polling.on_add_quick_poll_max_queue_size = 64`
 - `resume.policy = "priority_fifo"`
 - `resume.strict_fifo = true`
 - `tagging.paused_tag = "diskguard_paused"`
@@ -437,6 +435,11 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `server.host = "0.0.0.0"`
 - `server.port = 7070`
 - `server.on_add_max_body_bytes = 8192`
+
+### Threshold invariants
+
+- `disk.hard_pause_below_pct < disk.soft_pause_below_pct`
+- `disk.resume_floor_pct >= disk.soft_pause_below_pct`
 
 ### Env override examples
 
@@ -455,8 +458,7 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `DISKGUARD_SERVER_PORT=7070`
 - `DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS=1.0`
 - `DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS=10`
-- `DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY=32`
-- `DISKGUARD_ON_ADD_MAX_PENDING_TASKS=64`
+- `DISKGUARD_ON_ADD_QUICK_POLL_MAX_QUEUE_SIZE=64`
 - `DISKGUARD_RESUME_POLICY=priority_fifo`
 - `DISKGUARD_RESUME_STRICT_FIFO=true`
 - `DISKGUARD_TAGGING_PAUSED_TAG=diskguard_paused`

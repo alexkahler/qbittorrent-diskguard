@@ -21,7 +21,7 @@ watch_path = "/downloads"
 soft_pause_below_pct = 10.0
 # Enter HARD mode when free disk percent drops below this threshold. Default: 5.0. Type: float.
 hard_pause_below_pct = 5.0
-# Minimum free disk percent target for resume planning floor. Inrease this if you want torrents to resume when more space has been regained. Default: 10.0. Type: float.
+# Minimum free disk percent target for resume planning floor. Increase this if you want torrents to resume when more space has been regained. Must be >= soft_pause_below_pct. Default: 10.0. Type: float.
 resume_floor_pct = 10.0
 # Extra reserve added to resume planning floor in gibibytes. Increase this if you often experience restarts hovering around the SOFT limit. Default: 10.0. Type: float.
 safety_buffer_gb = 10.0
@@ -35,10 +35,8 @@ interval_seconds = 30
 on_add_quick_poll_interval_seconds = 1.0
 # Maximum on-add quick poll attempts per torrent hash in SOFT/HARD. Increase this if your qBittorrent is slow in getting metadata. Default: 10. Type: int.
 on_add_quick_poll_max_attempts = 10
-# Advanced: Maximum concurrent on-add quick poll tasks. Default: 32. Type: int.
-on_add_quick_poll_max_concurrency = 32
-# Advanced: Maximum queued/in-flight on-add quick poll tasks before returning HTTP 429. Default: 64. Type: int.
-on_add_max_pending_tasks = 64
+# Advanced: Maximum queued on-add quick poll hashes before returning HTTP 429. Default: 64. Type: int.
+on_add_quick_poll_max_queue_size = 64
 
 [resume]
 # Resume candidate ordering policy. Default: "priority_fifo". Type: string enum (smallest_first|priority_fifo|largest_first).

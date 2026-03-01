@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 import logging
 import time
 
@@ -71,7 +72,9 @@ class ModeEngine:
         try:
             disk_stats = self._disk_probe.measure()
         except DiskProbeError as exc:
-            self._logger.error("Disk probe failed for %s: %s", self._config.disk.watch_path, exc)
+            self._logger.error(
+                "Disk probe failed for %s: %s", self._config.disk.watch_path, exc
+            )
             return
 
         mode = classify_mode(
@@ -90,8 +93,29 @@ class ModeEngine:
 
         paused_tag = self._config.tagging.paused_tag
         soft_tag = self._config.tagging.soft_allowed_tag
+        
+        # Exit early if we're in NORMAL mode but have no managed-tagged torrents to enforce on.
+        if mode is Mode.NORMAL and self._previous_mode is not None:
+            try:
+                has_managed_tagged_torrents = (
+                    await self._has_managed_tagged_torrents_for_normal_mode(
+                        paused_tag=paused_tag,
+                        soft_tag=soft_tag,
+                    )
+                )
+            except qbittorrentapi.APIError as exc:
+                self._logger.warning("qBittorrent unavailable; skipping tick: %s", exc)
+                return
+            if not has_managed_tagged_torrents:
+                self._log_mode_transition_if_changed(
+                    mode=mode,
+                    free_pct=disk_stats.free_pct,
+                )
+                self._previous_mode = mode
+                return
+
         try:
-            # qbittorrentapi.Client.torrents_info signature validated via introspection.
+            # qbittorrentapi.Client.torrents_info(...)
             torrents: qbittorrentapi.TorrentInfoList = await asyncio.to_thread(
                 self._qb_client.torrents_info
             )
@@ -106,43 +130,39 @@ class ModeEngine:
             hash_value = str(torrent.hash).strip()
             if not hash_value:
                 continue
-            tags = {part.strip() for part in str(torrent.tags).split(",") if part.strip()}
+            tags = {
+                part.strip() for part in str(torrent.tags).split(",") if part.strip()
+            }
             if paused_tag in tags:
                 paused_hashes.add(hash_value)
                 paused_resume_candidates.append(torrent)
             if soft_tag in tags:
                 soft_allowed_hashes.add(hash_value)
-        paused_resume_torrents = paused_resume_candidates
-
-        cleaned_forced_paused_hashes = await self._cleanup_forced_download_paused_torrents(
+                
+        paused_hashes = await self._cleanup_forced_download_paused_torrents(
             torrents,
             paused_hashes=paused_hashes,
         )
-        cleaned_soft_allowed_hashes = await self._cleanup_soft_allowed_completed_torrents(
+        soft_allowed_hashes = await self._cleanup_soft_allowed_completed_torrents(
             torrents,
             soft_allowed_hashes=soft_allowed_hashes,
         )
 
-        if self._previous_mode != mode:
-            if self._previous_mode is None:
-                self._logger.info("DiskGuard mode initialized to %s. Free pct: %.2f", mode.value, disk_stats.free_pct)
-            else:
-                self._logger.info(
-                    "DiskGuard mode transition: %s -> %s. Free pct: %.2f",
-                    self._previous_mode.value,
-                    mode.value,
-                    disk_stats.free_pct,
-                )
+        self._log_mode_transition_if_changed(mode=mode, free_pct=disk_stats.free_pct)
 
         if mode is Mode.NORMAL:
+            # Remove soft_allowed tags in NORMAL mode since they're only relevant for SOFT-mode allowlisting.
+            await self._remove_tag_from_hashes(
+                tag=self._config.tagging.soft_allowed_tag,
+                torrent_hashes=list(soft_allowed_hashes),
+                reason="normal_cleanup",
+            )
+            
             await self._handle_normal_mode(
                 torrents,
                 disk_stats,
                 paused_hashes=paused_hashes,
-                soft_allowed_hashes=soft_allowed_hashes,
-                cleaned_forced_paused_hashes=cleaned_forced_paused_hashes,
-                cleaned_soft_allowed_hashes=cleaned_soft_allowed_hashes,
-                paused_resume_torrents=paused_resume_torrents,
+                paused_resume_torrents=paused_resume_candidates,
             )
         elif mode is Mode.SOFT:
             entering_soft = self._previous_mode is Mode.NORMAL
@@ -151,19 +171,71 @@ class ModeEngine:
                 entering_soft=entering_soft,
                 paused_hashes=paused_hashes,
                 soft_allowed_hashes=soft_allowed_hashes,
-                cleaned_soft_allowed_hashes=cleaned_soft_allowed_hashes,
             )
         else:
             entering_hard = self._previous_mode in {Mode.NORMAL, Mode.SOFT}
             await self._handle_hard_mode(
                 torrents,
                 entering_hard=entering_hard,
-                paused_hashes=paused_hashes,
                 soft_allowed_hashes=soft_allowed_hashes,
-                cleaned_soft_allowed_hashes=cleaned_soft_allowed_hashes,
             )
 
         self._previous_mode = mode
+
+    async def _has_managed_tagged_torrents_for_normal_mode(
+        self,
+        *,
+        paused_tag: str,
+        soft_tag: str,
+    ) -> bool:
+        """Returns whether NORMAL mode has any managed-tagged torrents.
+
+        Args:
+            paused_tag: Tag name used for DiskGuard-managed pauses.
+            soft_tag: Tag name used for SOFT-mode allowlist behavior.
+
+        Returns:
+            True when at least one torrent carries either managed tag.
+        """
+        # qbittorrentapi.Client.torrents_info(...)
+        paused_tagged_torrents = await asyncio.to_thread(
+            self._qb_client.torrents_info,
+            tag=paused_tag,
+        )
+        if paused_tagged_torrents:
+            return True
+        if soft_tag == paused_tag:
+            return False
+
+        # qbittorrentapi.Client.torrents_info(...)
+        soft_tagged_torrents = await asyncio.to_thread(
+            self._qb_client.torrents_info,
+            tag=soft_tag,
+        )
+        return bool(soft_tagged_torrents)
+
+    def _log_mode_transition_if_changed(self, *, mode: Mode, free_pct: float) -> None:
+        """Logs mode initialization/transition only when mode changed.
+
+        Args:
+            mode: Current mode for this tick.
+            free_pct: Current free disk percentage.
+        """
+        if self._previous_mode == mode:
+            return
+        if self._previous_mode is None:
+            self._logger.info(
+                "DiskGuard mode initialized to %s. Free pct: %.2f",
+                mode.value,
+                free_pct,
+            )
+            return
+        self._logger.info(
+            "DiskGuard mode transition: %s -> %s. Free pct: %.2f",
+            self._previous_mode.value,
+            mode.value,
+            free_pct,
+        )
 
     async def _cleanup_soft_allowed_completed_torrents(
         self,
@@ -171,10 +243,17 @@ class ModeEngine:
         *,
         soft_allowed_hashes: set[str],
     ) -> set[str]:
-        """Removes soft_allowed from torrents that are now completed/seeding."""
-        downloading_states = self._config.disk.downloading_states
-        removed_hashes: set[str] = set()
+        """Removes soft_allowed from torrents that are now completed/seeding.
 
+        Args:
+            torrents: Current torrent snapshots.
+            soft_allowed_hashes: Current in-memory hashes carrying soft_allowed.
+
+        Returns:
+            The updated soft-allowed hash set after cleanup.
+        """
+        downloading_states = self._config.disk.downloading_states
+        cleanup_hashes: list[str] = []
         for torrent in torrents:
             hash_value = str(torrent.hash).strip()
             state_value = str(torrent.state)
@@ -184,23 +263,21 @@ class ModeEngine:
                 continue
             if not is_completed_or_seeding_state(state_value, downloading_states):
                 continue
-            try:
-                await asyncio.to_thread(
-                    self._qb_client.torrents_remove_tags,
-                    tags=self._config.tagging.soft_allowed_tag,
-                    torrent_hashes=hash_value,
+            cleanup_hashes.append(hash_value)
+
+        removed_hashes = await self._remove_tag_from_hashes(
+            tag=self._config.tagging.soft_allowed_tag,
+            torrent_hashes=cleanup_hashes,
+            reason="completed_or_seeding",
+        )
+        for hash_value in removed_hashes:
+            soft_allowed_hashes.discard(hash_value)
+        for hash_value in cleanup_hashes:
+            if hash_value in removed_hashes:
+                self._logger.info(
+                    "Removed soft_allowed from %s (now seeding/completed)", hash_value
                 )
-                soft_allowed_hashes.discard(hash_value)
-                self._logger.info("Removed soft_allowed from %s (now seeding/completed)", hash_value)
-                removed_hashes.add(hash_value)
-            except qbittorrentapi.APIError as exc:
-                self._logger.warning(
-                    "Failed to remove tag %s from torrent %s: %s",
-                    self._config.tagging.soft_allowed_tag,
-                    hash_value,
-                    exc,
-                )
-        return removed_hashes
+        return soft_allowed_hashes
 
     async def _cleanup_forced_download_paused_torrents(
         self,
@@ -212,9 +289,10 @@ class ModeEngine:
 
         Args:
             torrents: Current torrent snapshots.
+            paused_hashes: Current in-memory hashes carrying paused tag.
 
         Returns:
-            Hashes where paused-tag cleanup succeeded this tick.
+            The updated paused-hash set after successful forcedDL cleanup.
         """
         forced_hashes: list[str] = []
         for torrent in torrents:
@@ -235,7 +313,7 @@ class ModeEngine:
         )
         for hash_value in removed_hashes:
             paused_hashes.discard(hash_value)
-        return removed_hashes
+        return paused_hashes
 
     async def _handle_normal_mode(
         self,
@@ -243,9 +321,6 @@ class ModeEngine:
         disk_stats,
         *,
         paused_hashes: set[str],
-        soft_allowed_hashes: set[str],
-        cleaned_forced_paused_hashes: set[str],
-        cleaned_soft_allowed_hashes: set[str],
         paused_resume_torrents: list[qbittorrentapi.TorrentDictionary],
     ) -> None:
         """Applies NORMAL-mode cleanup and resume planner execution.
@@ -253,27 +328,12 @@ class ModeEngine:
         Args:
             torrents: Current torrent snapshots.
             disk_stats: Current disk measurements used by resume planner.
-            cleaned_forced_paused_hashes: Hashes where forcedDL paused-tag
-                cleanup already succeeded this tick.
-            cleaned_soft_allowed_hashes: Hashes already cleaned during
-                completed/seeding soft-allowed cleanup in this tick.
         """
-        known_hashes = {
-            hash_value
-            for hash_value in (str(torrent.hash).strip() for torrent in torrents)
-            if hash_value
-        }
-        normal_cleanup_hashes = sorted(
-            (soft_allowed_hashes - cleaned_soft_allowed_hashes) & known_hashes
-        )
-        removed_soft_allowed = await self._remove_tag_from_hashes(
-            tag=self._config.tagging.soft_allowed_tag,
-            torrent_hashes=normal_cleanup_hashes,
-            reason="normal_cleanup",
-        )
-        soft_allowed_hashes.difference_update(removed_soft_allowed)
 
-        # FIXME: Is this code duplicated? Can we refactor out to a helper?
+        # Self-heal any torrents that are paused but no longer in paused download states, 
+        # likely due to user resuming without tag removal or external changes.
+        # This ensures we don't leave such torrents in a paused+tagged state indefinitely, 
+        # blocking them from future NORMAL-mode resume attempts.
         self_heal_hashes: list[str] = []
         for torrent in torrents:
             hash_value = str(torrent.hash).strip()
@@ -281,8 +341,6 @@ class ModeEngine:
             if not hash_value:
                 continue
             if hash_value not in paused_hashes:
-                continue
-            if hash_value in cleaned_forced_paused_hashes:
                 continue
             if is_paused_download_state(state_value):
                 continue
@@ -308,25 +366,19 @@ class ModeEngine:
         entering_soft: bool,
         paused_hashes: set[str],
         soft_allowed_hashes: set[str],
-        cleaned_soft_allowed_hashes: set[str],
     ) -> None:
         """Applies SOFT-mode transition and steady-state enforcement rules.
 
         Args:
             torrents: Current torrent snapshots.
             entering_soft: Whether this tick is a NORMAL -> SOFT transition.
-            cleaned_soft_allowed_hashes: Hashes already cleaned during
-                completed/seeding soft-allowed cleanup in this tick.
         """
         downloading_states = self._config.disk.downloading_states
 
-        known_soft_allowed = {
-            hash_value
-            for hash_value in soft_allowed_hashes
-            if hash_value not in cleaned_soft_allowed_hashes
-        }
+        known_soft_allowed = set(soft_allowed_hashes)
 
         if entering_soft:
+            transition_hashes: list[str] = []
             for torrent in torrents:
                 hash_value = str(torrent.hash).strip()
                 state_value = str(torrent.state)
@@ -340,28 +392,16 @@ class ModeEngine:
                     continue
                 if hash_value in soft_allowed_hashes:
                     continue
-                try:
-                    await asyncio.to_thread(
-                        self._qb_client.torrents_add_tags,
-                        tags=self._config.tagging.soft_allowed_tag,
-                        torrent_hashes=hash_value,
-                    )
-                    soft_allowed_hashes.add(hash_value)
-                    self._logger.info(
-                        "Added tag %s to torrent %s",
-                        self._config.tagging.soft_allowed_tag,
-                        hash_value,
-                    )
-                    known_soft_allowed.add(hash_value)
-                except qbittorrentapi.APIError as exc:
-                    self._logger.warning(
-                        "Failed to add tag %s to torrent %s: %s",
-                        self._config.tagging.soft_allowed_tag,
-                        hash_value,
-                        exc,
-                    )
+                transition_hashes.append(hash_value)
+            added_hashes = await self._add_tag_to_hashes(
+                tag=self._config.tagging.soft_allowed_tag,
+                torrent_hashes=transition_hashes,
+                reason="soft_transition",
+            )
+            soft_allowed_hashes.update(added_hashes)
+            known_soft_allowed.update(added_hashes)
 
-        # FIXME Can we refactor out into helper since it is same as in HARD mode?
+        hashes_to_pause: list[str] = []
         for torrent in torrents:
             hash_value = str(torrent.hash).strip()
             state_value = str(torrent.state)
@@ -376,57 +416,34 @@ class ModeEngine:
                 continue
             if hash_value in known_soft_allowed:
                 continue
-            await self._pause_and_mark(hash_value, paused_hashes=paused_hashes)
+            hashes_to_pause.append(hash_value)
+
+        await self._pause_and_mark(hashes_to_pause)
 
     async def _handle_hard_mode(
         self,
         torrents: qbittorrentapi.TorrentInfoList,
         *,
         entering_hard: bool,
-        paused_hashes: set[str],
         soft_allowed_hashes: set[str],
-        cleaned_soft_allowed_hashes: set[str],
     ) -> None:
         """Applies HARD-mode cleanup and full downloader pause enforcement.
 
         Args:
             torrents: Current torrent snapshots.
             entering_hard: Whether this tick entered HARD mode from NORMAL/SOFT.
-            cleaned_soft_allowed_hashes: Hashes already cleaned during
-                completed/seeding soft-allowed cleanup in this tick.
         """
         downloading_states = self._config.disk.downloading_states
 
         if entering_hard:
             self._logger.debug("Applying HARD transition rules")
 
-        for torrent in torrents:
-            hash_value = str(torrent.hash).strip()
-            if not hash_value:
-                continue
-            if hash_value in cleaned_soft_allowed_hashes:
-                continue
-            if hash_value in soft_allowed_hashes:
-                try:
-                    await asyncio.to_thread(
-                        self._qb_client.torrents_remove_tags,
-                        tags=self._config.tagging.soft_allowed_tag,
-                        torrent_hashes=hash_value,
-                    )
-                    soft_allowed_hashes.discard(hash_value)
-                    self._logger.info(
-                        "Removed tag %s from torrent %s (%s)",
-                        self._config.tagging.soft_allowed_tag,
-                        hash_value,
-                        "hard_cleanup",
-                    )
-                except qbittorrentapi.APIError as exc:
-                    self._logger.warning(
-                        "Failed to remove tag %s from torrent %s: %s",
-                        self._config.tagging.soft_allowed_tag,
-                        hash_value,
-                        exc,
-                    )
+        # Clean up all known soft-allowed hashes in HARD mode.
+        await self._remove_tag_from_hashes(
+            tag=self._config.tagging.soft_allowed_tag,
+            torrent_hashes=list(soft_allowed_hashes),
+            reason="hard_cleanup",
+        )
 
         hashes_to_pause: list[str] = []
         for torrent in torrents:
@@ -443,93 +460,63 @@ class ModeEngine:
                 continue
             hashes_to_pause.append(hash_value)
 
-        await self._pause_and_mark_many(hashes_to_pause, paused_hashes=paused_hashes)
+        await self._pause_and_mark(hashes_to_pause)
 
     async def _pause_and_mark(
         self,
-        torrent_hash: str,
-        *,
-        paused_hashes: set[str] | None = None,
+        torrent_hashes: Iterable[str],
     ) -> None:
-        """Pauses a torrent and applies DiskGuard's paused management tag.
-
-        Args:
-            torrent_hash: Hash of the torrent to pause and mark.
-        """
-        paused_tag = self._config.tagging.paused_tag
-        try:
-            await asyncio.to_thread(self._qb_client.torrents_pause, torrent_hashes=torrent_hash)
-            self._logger.info("Paused torrent %s", torrent_hash)
-        except qbittorrentapi.APIError as exc:
-            self._logger.warning("Failed to pause torrent %s: %s", torrent_hash, exc)
+        """Pauses and tags multiple torrents using batch API calls only."""
+        deduped_hashes = list(dict.fromkeys(torrent_hashes))
+        if not deduped_hashes:
             return
 
         try:
+            # qbittorrentapi.Client.torrents_pause(...)
+            await asyncio.to_thread(
+                self._qb_client.torrents_pause,
+                torrent_hashes=deduped_hashes,
+            )
+            for torrent_hash in deduped_hashes:
+                self._logger.info("Paused torrent %s", torrent_hash)
+        except qbittorrentapi.APIError as exc:
+            self._logger.warning(
+                "Failed to pause %d torrents in batch: %s",
+                len(deduped_hashes),
+                exc,
+            )
+            return
+
+        paused_tag = self._config.tagging.paused_tag
+        try:
+            # qbittorrentapi.Client.torrents_add_tags(...)
             await asyncio.to_thread(
                 self._qb_client.torrents_add_tags,
                 tags=paused_tag,
-                torrent_hashes=torrent_hash,
+                torrent_hashes=deduped_hashes,
             )
-            if paused_hashes is not None:
-                paused_hashes.add(torrent_hash)
         except qbittorrentapi.APIError as exc:
             self._logger.warning(
-                "Torrent %s paused but failed to add tag %s: %s",
-                torrent_hash,
+                "Paused %d torrents but failed to add tag %s in batch: %s",
+                len(deduped_hashes),
                 paused_tag,
                 exc,
             )
 
-    async def _pause_and_mark_many(
+    async def _add_tag_to_hashes(
         self,
-        torrent_hashes: list[str],
         *,
-        paused_hashes: set[str] | None = None,
-    ) -> None:
-        """Pauses and tags multiple torrents with a batch-first strategy."""
-        if not torrent_hashes:
-            return
-
-        try:
-            # qbittorrentapi.Client.torrents_pause signature validated via introspection.
-            await asyncio.to_thread(
-                self._qb_client.torrents_pause,
-                torrent_hashes=torrent_hashes,
-            )
-            for torrent_hash in torrent_hashes:
-                self._logger.info("Paused torrent %s", torrent_hash)
-        except qbittorrentapi.APIError:
-            for torrent_hash in torrent_hashes:
-                await self._pause_and_mark(torrent_hash, paused_hashes=paused_hashes)
-            return
-
-        paused_tag = self._config.tagging.paused_tag
-        try:
-            # qbittorrentapi.Client.torrents_add_tags signature validated via introspection.
-            await asyncio.to_thread(
-                self._qb_client.torrents_add_tags,
-                tags=paused_tag,
-                torrent_hashes=torrent_hashes,
-            )
-            if paused_hashes is not None:
-                paused_hashes.update(torrent_hashes)
-        except qbittorrentapi.APIError:
-            for torrent_hash in torrent_hashes:
-                try:
-                    await asyncio.to_thread(
-                        self._qb_client.torrents_add_tags,
-                        tags=paused_tag,
-                        torrent_hashes=torrent_hash,
-                    )
-                    if paused_hashes is not None:
-                        paused_hashes.add(torrent_hash)
-                except qbittorrentapi.APIError as exc:
-                    self._logger.warning(
-                        "Torrent %s paused but failed to add tag %s: %s",
-                        torrent_hash,
-                        paused_tag,
-                        exc,
-                    )
+        tag: str,
+        torrent_hashes: list[str],
+        reason: str,
+    ) -> set[str]:
+        """Adds a tag to hashes using a single batch API call."""
+        return await self._update_tag_on_hashes(
+            tag=tag,
+            torrent_hashes=torrent_hashes,
+            reason=reason,
+            add=True,
+        )
 
     async def _remove_tag_from_hashes(
         self,
@@ -538,41 +525,63 @@ class ModeEngine:
         torrent_hashes: list[str],
         reason: str,
     ) -> set[str]:
-        """Removes a tag from hashes with batch-first fallback to per-torrent calls."""
-        if not torrent_hashes:
+        """Removes a tag from hashes using a single batch API call."""
+        return await self._update_tag_on_hashes(
+            tag=tag,
+            torrent_hashes=torrent_hashes,
+            reason=reason,
+            add=False,
+        )
+
+    async def _update_tag_on_hashes(
+        self,
+        *,
+        tag: str,
+        torrent_hashes: list[str],
+        reason: str,
+        add: bool,
+    ) -> set[str]:
+        """Adds or removes a tag from hashes using one batch API call."""
+        deduped_hashes = list(dict.fromkeys(torrent_hashes))
+        if not deduped_hashes:
             return set()
 
-        removed_hashes: set[str] = set()
+        action = "add" if add else "remove"
+        verb_past = "Added" if add else "Removed"
+        preposition = "to" if add else "from"
         try:
-            # qbittorrentapi.Client.torrents_remove_tags signature validated via introspection.
-            await asyncio.to_thread(
-                self._qb_client.torrents_remove_tags,
-                tags=tag,
-                torrent_hashes=torrent_hashes,
-            )
-            removed_hashes.update(torrent_hashes)
-        except qbittorrentapi.APIError:
-            for torrent_hash in torrent_hashes:
-                try:
-                    await asyncio.to_thread(
-                        self._qb_client.torrents_remove_tags,
-                        tags=tag,
-                        torrent_hashes=torrent_hash,
-                    )
-                    removed_hashes.add(torrent_hash)
-                except qbittorrentapi.APIError as exc:
-                    self._logger.warning(
-                        "Failed to remove tag %s from torrent %s: %s",
-                        tag,
-                        torrent_hash,
-                        exc,
-                    )
-
-        for torrent_hash in removed_hashes:
-            self._logger.info(
-                "Removed tag %s from torrent %s (%s)",
+            if add:
+                # qbittorrentapi.Client.torrents_add_tags(...)
+                await asyncio.to_thread(
+                    self._qb_client.torrents_add_tags,
+                    tags=tag,
+                    torrent_hashes=deduped_hashes,
+                )
+            else:
+                # qbittorrentapi.Client.torrents_remove_tags(...)
+                await asyncio.to_thread(
+                    self._qb_client.torrents_remove_tags,
+                    tags=tag,
+                    torrent_hashes=deduped_hashes,
+                )
+        except qbittorrentapi.APIError as exc:
+            self._logger.warning(
+                "Failed to %s tag %s %s %d torrents in batch: %s",
+                action,
                 tag,
+                preposition,
+                len(deduped_hashes),
+                exc,
+            )
+            return set()
+
+        for torrent_hash in deduped_hashes:
+            self._logger.info(
+                "%s tag %s %s torrent %s (%s)",
+                verb_past,
+                tag,
+                preposition,
                 torrent_hash,
                 reason,
             )
-        return removed_hashes
+        return set(deduped_hashes)

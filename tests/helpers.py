@@ -56,8 +56,7 @@ def make_config(
     interval_seconds: int = 30,
     on_add_quick_poll_interval_seconds: float = 1.0,
     on_add_quick_poll_max_attempts: int = 10,
-    on_add_quick_poll_max_concurrency: int = 32,
-    on_add_max_pending_tasks: int = 64,
+    on_add_quick_poll_max_queue_size: int = 64,
     on_add_auth_token: str = "test-token",
     on_add_max_body_bytes: int = 8192,
 ) -> AppConfig:
@@ -80,8 +79,7 @@ def make_config(
             interval_seconds=interval_seconds,
             on_add_quick_poll_interval_seconds=on_add_quick_poll_interval_seconds,
             on_add_quick_poll_max_attempts=on_add_quick_poll_max_attempts,
-            on_add_quick_poll_max_concurrency=on_add_quick_poll_max_concurrency,
-            on_add_max_pending_tasks=on_add_max_pending_tasks,
+            on_add_quick_poll_max_queue_size=on_add_quick_poll_max_queue_size,
         ),
         resume=ResumeConfig(policy=policy, strict_fifo=strict_fifo),
         tagging=TaggingConfig(paused_tag=paused_tag, soft_allowed_tag=soft_allowed_tag),
@@ -166,10 +164,15 @@ class FakeQbClient:
         self.fail_remove_tag = fail_remove_tag or set()
 
         self.fetch_torrent_calls: list[str] = []
+        self.fetch_torrent_request_payloads: list[tuple[str, ...]] = []
         self.pause_calls: list[str] = []
+        self.pause_request_payloads: list[tuple[str, ...]] = []
         self.resume_calls: list[str] = []
+        self.resume_request_payloads: list[tuple[str, ...]] = []
         self.add_tag_calls: list[tuple[str, str]] = []
+        self.add_tag_request_payloads: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
         self.remove_tag_calls: list[tuple[str, str]] = []
+        self.remove_tag_request_payloads: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
 
     @property
     def fetch_calls(self) -> int:
@@ -185,6 +188,7 @@ class FakeQbClient:
         """Returns torrents, optionally filtered by hash or tag."""
         if torrent_hashes is not None:
             requested_hashes = _normalize_hash_filter(torrent_hashes)
+            self.fetch_torrent_request_payloads.append(tuple(requested_hashes))
             self.fetch_torrent_calls.extend(requested_hashes)
             for torrent_hash in requested_hashes:
                 if torrent_hash in self.fail_fetch_torrent:
@@ -192,17 +196,36 @@ class FakeQbClient:
                         f"fetch torrent failed for {torrent_hash}"
                     )
 
-            if len(requested_hashes) == 1:
-                torrent_hash = requested_hashes[0]
+            resolved_by_hash: dict[str, FakeTorrent] = {}
+            used_lookup_sequences = False
+            for torrent_hash in requested_hashes:
                 lookup_sequence = self._torrent_lookup_sequence.get(torrent_hash)
-                if lookup_sequence is not None:
-                    calls = self._torrent_lookup_calls_by_hash.get(torrent_hash, 0)
-                    index = min(calls, len(lookup_sequence) - 1)
-                    self._torrent_lookup_calls_by_hash[torrent_hash] = calls + 1
-                    resolved = lookup_sequence[index]
-                    if resolved is None:
-                        return []
-                    return [resolved]
+                if lookup_sequence is None:
+                    continue
+
+                used_lookup_sequences = True
+                calls = self._torrent_lookup_calls_by_hash.get(torrent_hash, 0)
+                index = min(calls, len(lookup_sequence) - 1)
+                self._torrent_lookup_calls_by_hash[torrent_hash] = calls + 1
+                resolved = lookup_sequence[index]
+                if resolved is not None:
+                    resolved_by_hash[torrent_hash] = resolved
+
+            if used_lookup_sequences:
+                if not self._torrents_sequence:
+                    return [resolved_by_hash[torrent_hash] for torrent_hash in requested_hashes if torrent_hash in resolved_by_hash]
+
+                index = min(self._fetch_calls, len(self._torrents_sequence) - 1)
+                by_hash = {torrent.hash: torrent for torrent in self._torrents_sequence[index]}
+                results: list[FakeTorrent] = []
+                for torrent_hash in requested_hashes:
+                    if torrent_hash in resolved_by_hash:
+                        results.append(resolved_by_hash[torrent_hash])
+                        continue
+                    if torrent_hash in by_hash:
+                        results.append(by_hash[torrent_hash])
+                return results
+
             if not self._torrents_sequence:
                 return []
             index = min(self._fetch_calls, len(self._torrents_sequence) - 1)
@@ -226,14 +249,18 @@ class FakeQbClient:
 
     def torrents_pause(self, *, torrent_hashes: str | Iterable[str] | None = None) -> None:
         """Stops a torrent."""
-        for torrent_hash in _normalize_hash_filter(torrent_hashes):
+        normalized_hashes = _normalize_hash_filter(torrent_hashes)
+        self.pause_request_payloads.append(tuple(normalized_hashes))
+        for torrent_hash in normalized_hashes:
             self.pause_calls.append(torrent_hash)
             if torrent_hash in self.fail_pause:
                 raise qbittorrentapi.APIConnectionError(f"pause failed for {torrent_hash}")
 
     def torrents_resume(self, *, torrent_hashes: str | Iterable[str] | None = None) -> None:
         """Resumes a torrent."""
-        for torrent_hash in _normalize_hash_filter(torrent_hashes):
+        normalized_hashes = _normalize_hash_filter(torrent_hashes)
+        self.resume_request_payloads.append(tuple(normalized_hashes))
+        for torrent_hash in normalized_hashes:
             self.resume_calls.append(torrent_hash)
             if torrent_hash in self.fail_resume:
                 raise qbittorrentapi.APIConnectionError(f"resume failed for {torrent_hash}")
@@ -246,7 +273,9 @@ class FakeQbClient:
     ) -> None:
         """Adds tags to a torrent."""
         normalized_tags = _normalize_tags(tags)
-        for torrent_hash in _normalize_hash_filter(torrent_hashes):
+        normalized_hashes = _normalize_hash_filter(torrent_hashes)
+        self.add_tag_request_payloads.append((tuple(normalized_hashes), tuple(normalized_tags)))
+        for torrent_hash in normalized_hashes:
             for tag in normalized_tags:
                 self.add_tag_calls.append((torrent_hash, tag))
                 if (torrent_hash, tag) in self.fail_add_tag:
@@ -260,7 +289,9 @@ class FakeQbClient:
     ) -> None:
         """Removes tags from a torrent."""
         normalized_tags = _normalize_tags(tags)
-        for torrent_hash in _normalize_hash_filter(torrent_hashes):
+        normalized_hashes = _normalize_hash_filter(torrent_hashes)
+        self.remove_tag_request_payloads.append((tuple(normalized_hashes), tuple(normalized_tags)))
+        for torrent_hash in normalized_hashes:
             for tag in normalized_tags:
                 self.remove_tag_calls.append((torrent_hash, tag))
                 if (torrent_hash, tag) in self.fail_remove_tag:

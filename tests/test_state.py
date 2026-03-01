@@ -69,3 +69,37 @@ def test_sort_resume_candidates_for_each_policy() -> None:
 
     fifo = sort_resume_candidates(items, ResumePolicy.PRIORITY_FIFO)
     assert [item.hash for item in fifo] == ["c", "b", "a"]
+
+
+def test_sort_resume_candidates_uses_priority_as_secondary_key() -> None:
+    """Tests sized policies use qBittorrent priority as tie-breaker before FIFO."""
+    items = [
+        torrent(
+            "older_low_priority",
+            state="pausedDL",
+            amount_left=20,
+            priority=1,
+            added_on=1,
+            tags=("diskguard_paused",),
+        ),
+        torrent(
+            "newer_high_priority",
+            state="pausedDL",
+            amount_left=20,
+            priority=10,
+            added_on=2,
+            tags=("diskguard_paused",),
+        ),
+    ]
+
+    smallest = sort_resume_candidates(items, ResumePolicy.SMALLEST_FIRST)
+    assert [item.hash for item in smallest] == [
+        "newer_high_priority",
+        "older_low_priority",
+    ]
+
+    largest = sort_resume_candidates(items, ResumePolicy.LARGEST_FIRST)
+    assert [item.hash for item in largest] == [
+        "newer_high_priority",
+        "older_low_priority",
+    ]

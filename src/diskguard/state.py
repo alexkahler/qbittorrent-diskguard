@@ -86,23 +86,23 @@ def sort_resume_candidates(
 ) -> list[qbittorrentapi.TorrentDictionary]:
     """Sorts candidates according to the selected resume policy."""
 
-    # FIXME: Secondary sort should be on TorrentDictionary.priority, not added_on.
     if policy is ResumePolicy.SMALLEST_FIRST:
         return sorted(
             candidates,
             key=lambda torrent: (
                 torrent.amount_left if torrent.amount_left is not None else math.inf,
+                -torrent.priority,
                 torrent.added_on,
                 str(torrent.hash).strip(),
             ),
         )
 
-    # FIXME: Secondary sort should be on TorrentDictionary.priority, not added_on.
     if policy is ResumePolicy.LARGEST_FIRST:
         return sorted(
             candidates,
             key=lambda torrent: (
                 -(torrent.amount_left if torrent.amount_left is not None else -1),
+                -torrent.priority,
                 torrent.added_on,
                 str(torrent.hash).strip(),
             ),

@@ -43,8 +43,7 @@ downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkin
 interval_seconds = 30
 on_add_quick_poll_interval_seconds = 1.0
 on_add_quick_poll_max_attempts = 10
-on_add_quick_poll_max_concurrency = 32
-on_add_max_pending_tasks = 64
+on_add_quick_poll_max_queue_size = 64
 
 [resume]
 policy = "priority_fifo"
@@ -106,8 +105,7 @@ class PollingConfig:
     interval_seconds: int = 30
     on_add_quick_poll_interval_seconds: float = 1.0
     on_add_quick_poll_max_attempts: int = 10
-    on_add_quick_poll_max_concurrency: int = 32
-    on_add_max_pending_tasks: int = 64
+    on_add_quick_poll_max_queue_size: int = 64
 
 
 @dataclass(frozen=True)
@@ -265,14 +263,9 @@ ENV_OVERRIDES: dict[str, tuple[str, str, EnvParser]] = {
         "on_add_quick_poll_max_attempts",
         _parse_int,
     ),
-    "DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY": (
+    "DISKGUARD_ON_ADD_QUICK_POLL_MAX_QUEUE_SIZE": (
         "polling",
-        "on_add_quick_poll_max_concurrency",
-        _parse_int,
-    ),
-    "DISKGUARD_ON_ADD_MAX_PENDING_TASKS": (
-        "polling",
-        "on_add_max_pending_tasks",
+        "on_add_quick_poll_max_queue_size",
         _parse_int,
     ),
     "DISKGUARD_RESUME_POLICY": ("resume", "policy", str),
@@ -284,6 +277,11 @@ ENV_OVERRIDES: dict[str, tuple[str, str, EnvParser]] = {
     "DISKGUARD_SERVER_PORT": ("server", "port", _parse_int),
     "DISKGUARD_ON_ADD_AUTH_TOKEN": ("server", "on_add_auth_token", str),
     "DISKGUARD_SERVER_ON_ADD_MAX_BODY_BYTES": ("server", "on_add_max_body_bytes", _parse_int),
+}
+
+REMOVED_ENV_OVERRIDES: dict[str, str] = {
+    "DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY": "DISKGUARD_ON_ADD_QUICK_POLL_MAX_QUEUE_SIZE",
+    "DISKGUARD_ON_ADD_MAX_PENDING_TASKS": "DISKGUARD_ON_ADD_QUICK_POLL_MAX_QUEUE_SIZE",
 }
 
 
@@ -427,6 +425,13 @@ def _apply_env_overrides(config: dict[str, Any]) -> None:
     Raises:
         ConfigError: If an expected section exists but is not a dictionary.
     """
+    for env_name, replacement in REMOVED_ENV_OVERRIDES.items():
+        raw_value = os.getenv(env_name)
+        if raw_value is not None:
+            raise ConfigError(
+                f"{env_name} is no longer supported; use {replacement} instead"
+            )
+
     for env_name, (section_name, key_name, parser) in ENV_OVERRIDES.items():
         raw_value = os.getenv(env_name)
         if raw_value is None:
@@ -456,6 +461,7 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
     tagging_section = _as_section(raw, "tagging", optional=True)
     logging_section = _as_section(raw, "logging", optional=True)
     server_section = _as_section(raw, "server", optional=True)
+    _validate_removed_polling_keys(polling_section)
 
     qb_config = QbittorrentConfig(
         url=_require_non_empty_string(qb_section, "url", "qbittorrent.url"),
@@ -514,13 +520,9 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
             polling_section.get("on_add_quick_poll_max_attempts", 10),
             "polling.on_add_quick_poll_max_attempts",
         ),
-        on_add_quick_poll_max_concurrency=_as_int(
-            polling_section.get("on_add_quick_poll_max_concurrency", 32),
-            "polling.on_add_quick_poll_max_concurrency",
-        ),
-        on_add_max_pending_tasks=_as_int(
-            polling_section.get("on_add_max_pending_tasks", 64),
-            "polling.on_add_max_pending_tasks",
+        on_add_quick_poll_max_queue_size=_as_int(
+            polling_section.get("on_add_quick_poll_max_queue_size", 64),
+            "polling.on_add_quick_poll_max_queue_size",
         ),
     )
 
@@ -557,6 +559,20 @@ def _build_config(raw: dict[str, Any]) -> AppConfig:
     )
     _validate(app_config)
     return app_config
+
+
+def _validate_removed_polling_keys(polling_section: dict[str, Any]) -> None:
+    """Rejects removed polling keys from legacy quick-poll implementations."""
+    if "on_add_quick_poll_max_concurrency" in polling_section:
+        raise ConfigError(
+            "polling.on_add_quick_poll_max_concurrency is no longer supported; "
+            "use polling.on_add_quick_poll_max_queue_size"
+        )
+    if "on_add_max_pending_tasks" in polling_section:
+        raise ConfigError(
+            "polling.on_add_max_pending_tasks is no longer supported; "
+            "use polling.on_add_quick_poll_max_queue_size"
+        )
 
 
 def _as_section(root: dict[str, Any], name: str, optional: bool = False) -> dict[str, Any]:
@@ -708,6 +724,10 @@ def _validate(config: AppConfig) -> None:
         raise ConfigError("disk.hard_pause_below_pct must be strictly lower than disk.soft_pause_below_pct")
     if not (0 <= config.disk.resume_floor_pct <= 100):
         raise ConfigError("disk.resume_floor_pct must be between 0 and 100")
+    if config.disk.resume_floor_pct < config.disk.soft_pause_below_pct:
+        raise ConfigError(
+            "disk.resume_floor_pct must be greater than or equal to disk.soft_pause_below_pct"
+        )
     if config.disk.safety_buffer_gb < 0:
         raise ConfigError("disk.safety_buffer_gb must be non-negative")
     if config.polling.interval_seconds <= 0:
@@ -716,10 +736,8 @@ def _validate(config: AppConfig) -> None:
         raise ConfigError("polling.on_add_quick_poll_interval_seconds must be greater than zero")
     if config.polling.on_add_quick_poll_max_attempts <= 0:
         raise ConfigError("polling.on_add_quick_poll_max_attempts must be greater than zero")
-    if config.polling.on_add_quick_poll_max_concurrency <= 0:
-        raise ConfigError("polling.on_add_quick_poll_max_concurrency must be greater than zero")
-    if config.polling.on_add_max_pending_tasks <= 0:
-        raise ConfigError("polling.on_add_max_pending_tasks must be greater than zero")
+    if config.polling.on_add_quick_poll_max_queue_size <= 0:
+        raise ConfigError("polling.on_add_quick_poll_max_queue_size must be greater than zero")
     if config.qbittorrent.connect_timeout_seconds <= 0:
         raise ConfigError("qbittorrent.connect_timeout_seconds must be greater than zero")
     if config.qbittorrent.read_timeout_seconds <= 0:

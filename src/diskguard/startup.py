@@ -187,9 +187,7 @@ async def run_qbittorrent_startup_preflight(
 
 async def _fetch_detected_versions(qb_client: qbittorrentapi.Client) -> tuple[str, str]:
     """Fetches qBittorrent and Web API versions via authenticated endpoints."""
-    # qbittorrentapi.Client.app_version signature validated via introspection.
     qbittorrent_version = str(await asyncio.to_thread(qb_client.app_version)).strip()
-    # qbittorrentapi.Client.app_web_api_version signature validated via introspection.
     webapi_version = str(await asyncio.to_thread(qb_client.app_web_api_version)).strip()
     return qbittorrent_version, webapi_version
 

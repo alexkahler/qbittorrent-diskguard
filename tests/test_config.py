@@ -38,8 +38,7 @@ def test_load_config_reads_defaults(tmp_path: Path) -> None:
     assert config.server.on_add_max_body_bytes == 8192
     assert config.polling.on_add_quick_poll_interval_seconds == 1.0
     assert config.polling.on_add_quick_poll_max_attempts == 10
-    assert config.polling.on_add_quick_poll_max_concurrency == 32
-    assert config.polling.on_add_max_pending_tasks == 64
+    assert config.polling.on_add_quick_poll_max_queue_size == 64
 
 
 def test_load_config_defaults_watch_path_when_missing(tmp_path: Path) -> None:
@@ -79,8 +78,7 @@ on_add_auth_token = "from-config"
     monkeypatch.setenv("DISKGUARD_POLLING_INTERVAL_SECONDS", "45")
     monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS", "0.5")
     monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS", "20")
-    monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY", "12")
-    monkeypatch.setenv("DISKGUARD_ON_ADD_MAX_PENDING_TASKS", "24")
+    monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_MAX_QUEUE_SIZE", "24")
     monkeypatch.setenv("DISKGUARD_DISK_DOWNLOADING_STATES", "downloading,metaDL")
     monkeypatch.setenv("DISKGUARD_ON_ADD_AUTH_TOKEN", "from-env")
     monkeypatch.setenv("DISKGUARD_SERVER_ON_ADD_MAX_BODY_BYTES", "4096")
@@ -91,11 +89,52 @@ on_add_auth_token = "from-config"
     assert config.polling.interval_seconds == 45
     assert config.polling.on_add_quick_poll_interval_seconds == 0.5
     assert config.polling.on_add_quick_poll_max_attempts == 20
-    assert config.polling.on_add_quick_poll_max_concurrency == 12
-    assert config.polling.on_add_max_pending_tasks == 24
+    assert config.polling.on_add_quick_poll_max_queue_size == 24
     assert config.disk.downloading_states == ("downloading", "metaDL")
     assert config.server.on_add_auth_token == "from-env"
     assert config.server.on_add_max_body_bytes == 4096
+
+
+def test_load_config_rejects_removed_polling_keys(tmp_path: Path) -> None:
+    """Tests that removed polling keys are rejected with a clear error."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[qbittorrent]
+url = "http://qbittorrent:8080"
+username = "admin"
+password = "secret"
+
+[polling]
+on_add_quick_poll_max_concurrency = 12
+
+[server]
+on_add_auth_token = "token"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="polling.on_add_quick_poll_max_concurrency is no longer supported",
+    ):
+        load_config(str(config_file))
+
+
+def test_load_config_rejects_removed_quick_poll_env_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tests that removed quick-poll env override names fail fast."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(_minimal_config(), encoding="utf-8")
+    monkeypatch.setenv("DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY", "12")
+
+    with pytest.raises(
+        ConfigError,
+        match="DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY is no longer supported",
+    ):
+        load_config(str(config_file))
 
 
 def test_load_config_rejects_invalid_thresholds(tmp_path: Path) -> None:
@@ -123,6 +162,35 @@ on_add_auth_token = "token"
         load_config(str(config_file))
 
 
+def test_load_config_rejects_resume_floor_below_soft_threshold(tmp_path: Path) -> None:
+    """Tests that resume floor cannot be lower than soft pause threshold."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+[qbittorrent]
+url = "http://qbittorrent:8080"
+username = "admin"
+password = "secret"
+
+[disk]
+watch_path = "/downloads"
+soft_pause_below_pct = 10
+hard_pause_below_pct = 5
+resume_floor_pct = 9
+
+[server]
+on_add_auth_token = "token"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="disk.resume_floor_pct must be greater than or equal to disk.soft_pause_below_pct",
+    ):
+        load_config(str(config_file))
+
+
 def test_load_config_bootstraps_default_template_when_missing(tmp_path: Path) -> None:
     """Tests that load config writes default template and fails on empty required secrets."""
     config_file = tmp_path / "config" / "config.toml"
@@ -137,6 +205,9 @@ def test_load_config_bootstraps_default_template_when_missing(tmp_path: Path) ->
     assert 'password = ""' in generated
     assert "[server]" in generated
     assert 'on_add_auth_token = ""' in generated
+    assert "on_add_quick_poll_max_queue_size = 64" in generated
+    assert "on_add_quick_poll_max_concurrency" not in generated
+    assert "on_add_max_pending_tasks" not in generated
 
 
 def test_load_config_does_not_overwrite_existing_file(tmp_path: Path) -> None:

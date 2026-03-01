@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hmac
 import logging
 import re
@@ -16,12 +17,19 @@ from diskguard.errors import DiskProbeError
 from diskguard.models import Mode
 from diskguard.state import (
     classify_mode,
-    is_downloading_ish_state,
     is_forced_download_state,
 )
 
 ON_ADD_AUTH_HEADER = "X-DiskGuard-Token"
 TORRENT_HASH_PATTERN = re.compile(r"^(?:[A-Fa-f0-9]{40}|[A-Fa-f0-9]{64})$")
+
+
+@dataclass
+class _QueuedOnAdd:
+    """Tracks pending quick-poll metadata for one torrent hash."""
+
+    mode: Mode
+    attempts: int = 0
 
 
 class WarningRateLimiter:
@@ -84,11 +92,8 @@ class OnAddHandler:
         self._disk_probe = disk_probe
         self._logger = logger or logging.getLogger(__name__)
         self._warning_rate_limiter = warning_rate_limiter or WarningRateLimiter()
-        self._background_tasks: set[asyncio.Task[None]] = set()
-        self._on_add_tasks_by_hash: dict[str, asyncio.Task[None]] = {}
-        self._quick_poll_semaphore = asyncio.Semaphore(
-            self._config.polling.on_add_quick_poll_max_concurrency
-        )
+        self._quick_poll_queue_by_hash: dict[str, _QueuedOnAdd] = {}
+        self._quick_poll_worker_task: asyncio.Task[None] | None = None
 
     @property
     def max_request_body_bytes(self) -> int:
@@ -123,7 +128,10 @@ class OnAddHandler:
             )
         if not _is_valid_torrent_hash(torrent_hash):
             return web.json_response(
-                {"status": "error", "message": "hash must be a 40 or 64 character hex string"},
+                {
+                    "status": "error",
+                    "message": "hash must be a 40 or 64 character hex string",
+                },
                 status=400,
             )
         torrent_name = _coerce_log_value(payload.get("name"))
@@ -132,8 +140,12 @@ class OnAddHandler:
         try:
             disk_stats = self._disk_probe.measure()
         except DiskProbeError as exc:
-            self._warn_rate_limited("on_add_disk_probe", "on-add disk probe failed: %s", exc)
-            return web.json_response({"status": "accepted", "action": "deferred"}, status=202)
+            self._warn_rate_limited(
+                "on_add_disk_probe", "on-add disk probe failed: %s", exc
+            )
+            return web.json_response(
+                {"status": "accepted", "action": "deferred"}, status=202
+            )
 
         mode = classify_mode(
             disk_stats.free_pct,
@@ -145,9 +157,7 @@ class OnAddHandler:
         used_gb = used_bytes / (1024**3)
         used_pct = max(100.0 - disk_stats.free_pct, 0.0)
 
-        message = (
-            "on_add triggered hash=%s mode=%s free_gb=%.2f used_gb=%.2f free_pct=%.2f used_pct=%.2f"
-        )
+        message = "on_add triggered hash=%s mode=%s free_gb=%.2f used_gb=%.2f free_pct=%.2f used_pct=%.2f"
         args: list[object] = [
             torrent_hash,
             mode.value,
@@ -165,16 +175,24 @@ class OnAddHandler:
         self._logger.info(message, *args)
 
         if mode is Mode.NORMAL:
-            return web.json_response({"status": "ok", "action": "none", "mode": mode.value}, status=200)
+            return web.json_response(
+                {"status": "ok", "action": "none", "mode": mode.value}, status=200
+            )
 
         # Keep the endpoint non-blocking: quick-poll + pause/tag executes in background.
-        existing_task = self._on_add_tasks_by_hash.get(torrent_hash)
-        if existing_task is not None and not existing_task.done():
+        if torrent_hash in self._quick_poll_queue_by_hash:
             return web.json_response(
-                {"status": "accepted", "action": "quick_poll_already_scheduled", "mode": mode.value},
+                {
+                    "status": "accepted",
+                    "action": "quick_poll_already_scheduled",
+                    "mode": mode.value,
+                },
                 status=202,
             )
-        if self._pending_task_count() >= self._config.polling.on_add_max_pending_tasks:
+        if (
+            len(self._quick_poll_queue_by_hash)
+            >= self._config.polling.on_add_quick_poll_max_queue_size
+        ):
             self._warn_rate_limited(
                 "on_add_pending_limit",
                 "on-add pending task limit reached; rejecting torrent %s",
@@ -185,32 +203,23 @@ class OnAddHandler:
                 status=429,
             )
 
-        #TODO: Consider whether we can consolidate hashes in the quick poll update to avoid spamming API calls when multiple on-add callbacks are received. qbittorrentapi torrents_info support multiple hashes passed as parameter. This would involve tracking in-flight tasks by torrent hash and skipping scheduling new tasks when an existing one is still pending for the same hash.
-        task = asyncio.create_task(self._quick_poll_then_pause_and_mark(torrent_hash, mode))
-        self._background_tasks.add(task)
-        self._on_add_tasks_by_hash[torrent_hash] = task
-
-        def _cleanup_task(done_task: asyncio.Task[None]) -> None:
-            """Removes completed quick-poll tasks from tracking collections.
-
-            Args:
-                done_task: Background task that has completed execution.
-            """
-            self._background_tasks.discard(done_task)
-            if self._on_add_tasks_by_hash.get(torrent_hash) is done_task:
-                self._on_add_tasks_by_hash.pop(torrent_hash, None)
-
-        task.add_done_callback(_cleanup_task)
+        self._quick_poll_queue_by_hash[torrent_hash] = _QueuedOnAdd(mode=mode)
+        self._ensure_quick_poll_worker_running()
         return web.json_response(
-            {"status": "accepted", "action": "quick_poll_pause_and_mark", "mode": mode.value},
+            {
+                "status": "accepted",
+                "action": "quick_poll_pause_and_mark",
+                "mode": mode.value,
+            },
             status=202,
         )
 
     async def shutdown(self) -> None:
         """Awaits in-flight on-add background tasks."""
-        if not self._background_tasks:
+        worker_task = self._quick_poll_worker_task
+        if worker_task is None:
             return
-        await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        await asyncio.gather(worker_task, return_exceptions=True)
 
     async def _read_payload(self, request: web.Request) -> dict[str, str]:
         """Reads form and query payload values from a request.
@@ -222,96 +231,188 @@ class OnAddHandler:
             A merged payload dictionary where query params fill missing form keys.
         """
         payload: dict[str, str] = {}
+        posted_items: list[tuple[str, object]] = []
         if request.can_read_body:
             try:
                 posted = await request.post()
+                posted_items = [(str(key), value) for key, value in posted.items()]
             except web.HTTPRequestEntityTooLarge:
                 raise
             except Exception:  # noqa: BLE001
-                posted = {}
-            for key, value in posted.items():
-                payload[str(key)] = str(value)
+                posted_items = []
+            for key, value in posted_items:
+                payload[key] = str(value)
 
         for key, value in request.query.items():
             payload.setdefault(str(key), str(value))
         return payload
 
-    async def _pause_and_mark(self, torrent_hash: str, mode: Mode) -> None:
-        """Pauses a torrent and applies DiskGuard's managed pause tag.
+    def _ensure_quick_poll_worker_running(self) -> None:
+        """Starts quick-poll worker if one is not currently active."""
+        worker_task = self._quick_poll_worker_task
+        if worker_task is None or worker_task.done():
+            self._quick_poll_worker_task = asyncio.create_task(self._quick_poll_worker())
 
-        Args:
-            torrent_hash: qBittorrent torrent hash.
-            mode: Mode active when on-add callback was processed.
+    async def _quick_poll_worker(self) -> None:
+        """Processes queued on-add hashes via single batched quick-poll loop.
+
+        The worker guarantees at most one polling loop at a time. New hashes can be
+        appended while the worker runs and will be picked up in subsequent iterations.
         """
-        paused_tag = self._config.tagging.paused_tag
+        current_task = asyncio.current_task()
+        max_attempts = self._config.polling.on_add_quick_poll_max_attempts
+        interval_seconds = self._config.polling.on_add_quick_poll_interval_seconds
         try:
-            await asyncio.to_thread(self._qb_client.torrents_pause, torrent_hashes=torrent_hash)
+            # Debounce the initial fetch so bursty on-add callbacks coalesce into
+            # a single first quick-poll batch.
+            await asyncio.sleep(interval_seconds)
+            while self._quick_poll_queue_by_hash:
+                polled_hashes = list(self._quick_poll_queue_by_hash)
+
+                payload_loaded = False
+                payload_by_hash: dict[str, object] = {}
+                try:
+                    # qbittorrentapi.Client.torrents_info(...)
+                    payload = await asyncio.to_thread(
+                        self._qb_client.torrents_info,
+                        torrent_hashes=polled_hashes,
+                    )
+                    payload_loaded = True
+                    payload_by_hash = {
+                        str(torrent.hash).strip(): torrent
+                        for torrent in payload
+                        if str(torrent.hash).strip()
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    self._warn_rate_limited(
+                        "on_add_qb_failure",
+                        "on-add quick poll failed for %d torrents in batch: %s",
+                        len(polled_hashes),
+                        exc,
+                    )
+
+                known_size_hashes_to_pause: list[str] = []
+                mode_by_hash: dict[str, Mode] = {}
+                for torrent_hash in polled_hashes:
+                    queued = self._quick_poll_queue_by_hash.get(torrent_hash)
+                    if queued is None:
+                        continue
+
+                    torrent_dict = payload_by_hash.get(torrent_hash)
+                    if payload_loaded and torrent_dict is None:
+                        self._quick_poll_queue_by_hash.pop(torrent_hash, None)
+                        continue
+                    if torrent_dict is None:
+                        continue
+
+                    amount_left = getattr(torrent_dict, "amount_left", None)
+                    if amount_left is None or amount_left <= 0:
+                        continue
+
+                    state_value = str(getattr(torrent_dict, "state", ""))
+                    if is_forced_download_state(state_value):
+                        self._logger.debug(
+                            "on-add quick poll skipping forcedDL torrent %s in %s mode",
+                            torrent_hash,
+                            queued.mode.value,
+                        )
+                        self._quick_poll_queue_by_hash.pop(torrent_hash, None)
+                        continue
+
+                    # Keep hashes queued while pause/tag runs so duplicate /on-add
+                    # requests are still deduped during in-flight enforcement.
+                    known_size_hashes_to_pause.append(torrent_hash)
+                    mode_by_hash[torrent_hash] = queued.mode
+
+                if known_size_hashes_to_pause:
+                    try:
+                        await self._pause_and_mark_many(
+                            known_size_hashes_to_pause,
+                            mode_by_hash=mode_by_hash,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        self._warn_rate_limited(
+                            "on_add_qb_failure",
+                            "on-add pause/tag failed for %d queued torrents: %s",
+                            len(known_size_hashes_to_pause),
+                            exc,
+                        )
+                    else:
+                        for torrent_hash in known_size_hashes_to_pause:
+                            self._quick_poll_queue_by_hash.pop(torrent_hash, None)
+
+                # Attempt accounting applies only to hashes still queued from this batch.
+                for torrent_hash in polled_hashes:
+                    queued = self._quick_poll_queue_by_hash.get(torrent_hash)
+                    if queued is None:
+                        continue
+                    queued.attempts += 1
+                    if queued.attempts >= max_attempts:
+                        self._quick_poll_queue_by_hash.pop(torrent_hash, None)
+
+                if self._quick_poll_queue_by_hash:
+                    await asyncio.sleep(interval_seconds)
+        finally:
+            # Clear worker reference only if it still points at this task.
+            if self._quick_poll_worker_task is current_task:
+                self._quick_poll_worker_task = None
+
+    async def _pause_and_mark_many(
+        self,
+        torrent_hashes: list[str],
+        *,
+        mode_by_hash: dict[str, Mode] | None = None,
+    ) -> None:
+        """Pauses and tags multiple torrents using batch API calls only."""
+        if not torrent_hashes:
+            return
+        deduped_hashes = list(set(torrent_hashes))
+        try:
             await asyncio.to_thread(
-                self._qb_client.torrents_add_tags,
-                tags=paused_tag,
-                torrent_hashes=torrent_hash,
-            )
-            self._logger.debug(
-                "on-add paused torrent %s and added tag %s in %s mode",
-                torrent_hash,
-                paused_tag,
-                mode.value,
+                self._qb_client.torrents_pause,
+                torrent_hashes=deduped_hashes,
             )
         except qbittorrentapi.APIError as exc:
             self._warn_rate_limited(
                 "on_add_qb_failure",
-                "on-add failed to pause/tag torrent %s: %s",
-                torrent_hash,
+                "on-add failed to pause %d torrents in batch: %s",
+                len(deduped_hashes),
                 exc,
             )
+            return
 
-    async def _quick_poll_then_pause_and_mark(self, torrent_hash: str, mode: Mode) -> None:
-        """Quick-polls a single torrent until size is known, then pauses/tags it."""
-        max_attempts = self._config.polling.on_add_quick_poll_max_attempts
-        interval_seconds = self._config.polling.on_add_quick_poll_interval_seconds
-        downloading_states = self._config.disk.downloading_states
-
-        async with self._quick_poll_semaphore:
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    payload = await asyncio.to_thread(
-                        self._qb_client.torrents_info,
-                        torrent_hashes=torrent_hash,
-                    )
-                    torrent_dict = payload[0] if payload else None
-                except qbittorrentapi.APIError as exc:
-                    self._warn_rate_limited(
-                        "on_add_qb_failure",
-                        "on-add quick poll failed for torrent %s: %s",
+        paused_tag = self._config.tagging.paused_tag
+        try:
+            await asyncio.to_thread(
+                self._qb_client.torrents_add_tags,
+                tags=paused_tag,
+                torrent_hashes=deduped_hashes,
+            )
+            for torrent_hash in deduped_hashes:
+                mode = (
+                    mode_by_hash.get(torrent_hash) if mode_by_hash is not None else None
+                )
+                if mode is None:
+                    self._logger.debug(
+                        "on-add paused torrent %s and added tag %s",
                         torrent_hash,
-                        exc,
+                        paused_tag,
                     )
-                    return
-
-                if torrent_dict is not None:
-                    amount_left = torrent_dict.amount_left
-                    state_value = str(torrent_dict.state)
-                    if amount_left is not None and amount_left > 0:
-                        if is_forced_download_state(state_value):
-                            self._logger.debug(
-                                "on-add quick poll skipping forcedDL torrent %s in %s mode",
-                                torrent_hash,
-                                mode.value,
-                            )
-                            return
-
-                        if is_downloading_ish_state(state_value, downloading_states):
-                            await self._pause_and_mark(torrent_hash, mode)
-                            return
-
-                if attempt < max_attempts:
-                    await asyncio.sleep(interval_seconds)
-
-        self._logger.debug(
-            "on-add quick poll exhausted for %s after %d attempts without pausing",
-            torrent_hash,
-            max_attempts,
-        )
+                else:
+                    self._logger.debug(
+                        "on-add paused torrent %s and added tag %s in %s mode",
+                        torrent_hash,
+                        paused_tag,
+                        mode.value,
+                    )
+        except qbittorrentapi.APIError as exc:
+            self._warn_rate_limited(
+                "on_add_qb_failure",
+                "on-add paused %d torrents but failed to add tag %s in batch: %s",
+                len(deduped_hashes),
+                paused_tag,
+                exc,
+            )
 
     def _warn_rate_limited(self, key: str, message: str, *args: object) -> None:
         """Logs a warning only if rate limiter allows it.
@@ -324,10 +425,6 @@ class OnAddHandler:
         if self._warning_rate_limiter.allow(key):
             self._logger.warning(message, *args)
 
-    def _pending_task_count(self) -> int:
-        """Returns the number of in-flight on-add background tasks."""
-        return sum(1 for task in self._background_tasks if not task.done())
-
     def _is_authorized(self, request: web.Request) -> bool:
         """Returns whether request token matches configured on-add shared secret."""
         provided_token = request.headers.get(ON_ADD_AUTH_HEADER)
@@ -335,7 +432,6 @@ class OnAddHandler:
             return False
         expected_token = self._config.server.on_add_auth_token
         return hmac.compare_digest(provided_token, expected_token)
-
 
 def create_http_app(on_add_handler: OnAddHandler) -> web.Application:
     """Builds the aiohttp app and routes.
