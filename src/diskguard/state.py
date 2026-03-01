@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from collections.abc import Iterable
 
-from diskguard.models import DiskStats, Mode, ResumePolicy, TorrentSnapshot
+import qbittorrentapi
+
+from diskguard.models import DiskStats, Mode, ResumePolicy
 
 PAUSED_DOWNLOAD_STATES = frozenset({"pausedDL", "stoppedDL"})
-
-
-def parse_tags(raw_tags: str | None) -> frozenset[str]:
-    """Parses qBittorrent's comma-separated tags string."""
-    if not raw_tags:
-        return frozenset()
-    tags = [tag.strip() for tag in raw_tags.split(",") if tag.strip()]
-    return frozenset(tags)
 
 
 def classify_mode(
@@ -59,17 +53,18 @@ def is_completed_or_seeding_state(state: str, downloading_states: Iterable[str])
 
 
 def is_active_downloader_for_projection(
-    torrent: TorrentSnapshot,
+    torrent: qbittorrentapi.TorrentDictionary,
     *,
-    paused_tag: str,
+    paused_hashes: set[str],
     downloading_states: Iterable[str],
 ) -> bool:
     """Returns whether the torrent should count toward active_remaining."""
-    if torrent.has_tag(paused_tag):
+    if str(torrent.hash).strip() in paused_hashes:
         return False
-    if is_forced_download_state(torrent.state):
+    state_value = str(torrent.state)
+    if is_forced_download_state(state_value):
         return False
-    return is_downloading_ish_state(torrent.state, downloading_states)
+    return is_downloading_ish_state(state_value, downloading_states)
 
 
 def calculate_budget(
@@ -86,17 +81,19 @@ def calculate_budget(
 
 
 def sort_resume_candidates(
-    candidates: list[TorrentSnapshot],
+    candidates: list[qbittorrentapi.TorrentDictionary],
     policy: ResumePolicy,
-) -> list[TorrentSnapshot]:
+) -> list[qbittorrentapi.TorrentDictionary]:
     """Sorts candidates according to the selected resume policy."""
+
     if policy is ResumePolicy.SMALLEST_FIRST:
         return sorted(
             candidates,
             key=lambda torrent: (
                 torrent.amount_left if torrent.amount_left is not None else math.inf,
+                -torrent.priority,
                 torrent.added_on,
-                torrent.hash,
+                str(torrent.hash).strip(),
             ),
         )
 
@@ -105,8 +102,9 @@ def sort_resume_candidates(
             candidates,
             key=lambda torrent: (
                 -(torrent.amount_left if torrent.amount_left is not None else -1),
+                -torrent.priority,
                 torrent.added_on,
-                torrent.hash,
+                str(torrent.hash).strip(),
             ),
         )
 
@@ -115,6 +113,6 @@ def sort_resume_candidates(
         key=lambda torrent: (
             -torrent.priority,
             torrent.added_on,
-            torrent.hash,
+            str(torrent.hash).strip(),
         ),
     )

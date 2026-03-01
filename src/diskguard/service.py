@@ -6,12 +6,13 @@ import asyncio
 import logging
 
 from aiohttp import web
+import qbittorrentapi
 
 from diskguard.api import OnAddHandler, create_http_app
 from diskguard.config import AppConfig
 from diskguard.disk_probe import DiskProbe
 from diskguard.engine import ModeEngine
-from diskguard.qbittorrent import QbittorrentClient
+from diskguard.qbittorrent import build_qbittorrent_client
 from diskguard.resume_planner import ResumePlanner
 from diskguard.startup import run_qbittorrent_startup_preflight
 
@@ -34,7 +35,7 @@ class DiskGuardService:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
 
-        self._qb_client: QbittorrentClient | None = None
+        self._qb_client: qbittorrentapi.Client | None = None
         self._on_add_handler: OnAddHandler | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -43,7 +44,7 @@ class DiskGuardService:
 
     async def start(self) -> None:
         """Starts HTTP listener and polling loop."""
-        self._qb_client = QbittorrentClient(self._config.qbittorrent, logger=self._logger)
+        self._qb_client = build_qbittorrent_client(self._config.qbittorrent)
         try:
             await run_qbittorrent_startup_preflight(
                 self._qb_client,
@@ -51,7 +52,10 @@ class DiskGuardService:
                 logger=self._logger,
             )
         except Exception:  # noqa: BLE001
-            await self._qb_client.close()
+            try:
+                await asyncio.to_thread(self._qb_client.auth_log_out)
+            except qbittorrentapi.APIError:
+                pass
             self._qb_client = None
             raise
 
@@ -108,7 +112,10 @@ class DiskGuardService:
             self._on_add_handler = None
 
         if self._qb_client:
-            await self._qb_client.close()
+            try:
+                await asyncio.to_thread(self._qb_client.auth_log_out)
+            except qbittorrentapi.APIError:
+                pass
             self._qb_client = None
 
         self._logger.info("DiskGuard stopped")

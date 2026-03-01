@@ -45,7 +45,7 @@ Additional guarantees:
 
 - Docker and docker-compose or Python >3.12.
 - qBittorrent Web API reachable from DiskGuard container.
-- qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
+- qBittorrent `>= v4.2.0` and Web API `>= 2.3.0`.
 - DiskGuard container must mount the same filesystem qBittorrent writes downloads to. 
 
 ---
@@ -300,8 +300,7 @@ downloading_states = ["downloading", "metaDL", "queuedDL", "stalledDL", "checkin
 interval_seconds = 30
 on_add_quick_poll_interval_seconds = 1.0
 on_add_quick_poll_max_attempts = 10
-on_add_quick_poll_max_concurrency = 32
-on_add_max_pending_tasks = 64
+on_add_quick_poll_max_queue_size = 64
 
 [resume]
 policy = "priority_fifo"
@@ -427,8 +426,7 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `polling.interval_seconds = 30`
 - `polling.on_add_quick_poll_interval_seconds = 1.0`
 - `polling.on_add_quick_poll_max_attempts = 10`
-- `polling.on_add_quick_poll_max_concurrency = 32`
-- `polling.on_add_max_pending_tasks = 64`
+- `polling.on_add_quick_poll_max_queue_size = 64`
 - `resume.policy = "priority_fifo"`
 - `resume.strict_fifo = true`
 - `tagging.paused_tag = "diskguard_paused"`
@@ -438,6 +436,11 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `server.port = 7070`
 - `server.on_add_max_body_bytes = 8192`
 
+### Threshold invariants
+
+- `disk.hard_pause_below_pct < disk.soft_pause_below_pct`
+- `disk.resume_floor_pct >= disk.soft_pause_below_pct`
+
 ### Env override examples
 
 - `DISKGUARD_QBITTORRENT_URL=http://qbittorrent:8080`
@@ -445,7 +448,6 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `DISKGUARD_QBITTORRENT_PASSWORD=your-qb-password`
 - `DISKGUARD_QBITTORRENT_CONNECT_TIMEOUT_SECONDS=2.0`
 - `DISKGUARD_QBITTORRENT_READ_TIMEOUT_SECONDS=8.0`
-- `DISKGUARD_QBITTORRENT_TOTAL_TIMEOUT_SECONDS=12.0`
 - `DISKGUARD_DISK_WATCH_PATH=/downloads`
 - `DISKGUARD_DISK_SOFT_PAUSE_BELOW_PCT=10`
 - `DISKGUARD_DISK_HARD_PAUSE_BELOW_PCT=5`
@@ -456,8 +458,7 @@ On startup it creates `/config` and `/config/config.toml` automatically when mis
 - `DISKGUARD_SERVER_PORT=7070`
 - `DISKGUARD_ON_ADD_QUICK_POLL_INTERVAL_SECONDS=1.0`
 - `DISKGUARD_ON_ADD_QUICK_POLL_MAX_ATTEMPTS=10`
-- `DISKGUARD_ON_ADD_QUICK_POLL_MAX_CONCURRENCY=32`
-- `DISKGUARD_ON_ADD_MAX_PENDING_TASKS=64`
+- `DISKGUARD_ON_ADD_QUICK_POLL_MAX_QUEUE_SIZE=64`
 - `DISKGUARD_RESUME_POLICY=priority_fifo`
 - `DISKGUARD_RESUME_STRICT_FIFO=true`
 - `DISKGUARD_TAGGING_PAUSED_TAG=diskguard_paused`
@@ -602,7 +603,7 @@ python -m piptools compile --generate-hashes --output-file requirements.lock req
 ### qBittorrent version incompatibility
 
 - **Symptom**: startup fails immediately with an incompatible version ERROR message.
-- Required minimum: qBittorrent `>= 5.1.0` and Web API `>= 2.3.0`.
+- Required minimum: qBittorrent `>= v4.2.0` and Web API `>= 2.3.0`.
 - Upgrade qBittorrent, then restart DiskGuard.
 
 ### Network failure between containers
